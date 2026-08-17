@@ -181,6 +181,20 @@ create table if not exists public.attendance (
   unique (class_id, student_id, attendance_date)
 );
 
+create table if not exists public.interventions (
+  id uuid primary key default gen_random_uuid(),
+  student_id uuid not null references public.profiles(id) on delete cascade,
+  class_id uuid not null references public.classes(id) on delete cascade,
+  teacher_id uuid not null references public.profiles(id) on delete cascade,
+  reason text not null,
+  action_taken text not null,
+  follow_up_date date,
+  status text not null default 'pending' check (status in ('pending','improving','resolved')),
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(),
   actor_id uuid references public.profiles(id),
@@ -217,6 +231,7 @@ create index if not exists idx_exams_class_id on public.exams(class_id);
 create index if not exists idx_questions_exam_id on public.questions(exam_id);
 create index if not exists idx_exam_attempts_exam_student on public.exam_attempts(exam_id, student_id);
 create index if not exists idx_scores_class_student on public.scores(class_id, student_id);
+create index if not exists idx_interventions_student_class on public.interventions(student_id, class_id);
 create index if not exists idx_audit_logs_actor on public.audit_logs(actor_id);
 
 create or replace function public.is_school_admin(target_school_id uuid)
@@ -317,6 +332,7 @@ alter table public.exam_attempts enable row level security;
 alter table public.submission_answers enable row level security;
 alter table public.scores enable row level security;
 alter table public.attendance enable row level security;
+alter table public.interventions enable row level security;
 alter table public.audit_logs enable row level security;
 alter table public.system_settings enable row level security;
 
@@ -547,6 +563,31 @@ using (
 with check (
   public.is_class_teacher(class_id)
   or public.is_school_admin((select c.school_id from public.classes c where c.id = attendance.class_id))
+);
+
+drop policy if exists "interventions visible to teachers and admins" on public.interventions;
+create policy "interventions visible to teachers and admins"
+on public.interventions for select
+to authenticated
+using (
+  teacher_id = auth.uid()
+  or public.is_super_admin()
+  or public.is_school_admin((select c.school_id from public.classes c where c.id = interventions.class_id))
+);
+
+drop policy if exists "teachers manage interventions" on public.interventions;
+create policy "teachers manage interventions"
+on public.interventions for all
+to authenticated
+using (
+  teacher_id = auth.uid()
+  or public.is_super_admin()
+  or public.is_school_admin((select c.school_id from public.classes c where c.id = interventions.class_id))
+)
+with check (
+  teacher_id = auth.uid()
+  or public.is_super_admin()
+  or public.is_school_admin((select c.school_id from public.classes c where c.id = interventions.class_id))
 );
 
 drop policy if exists "admins manage announcements" on public.announcements;

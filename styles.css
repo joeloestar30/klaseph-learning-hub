@@ -467,6 +467,11 @@ button {
   color: var(--gold);
 }
 
+.chip.red {
+  background: #fff1f0;
+  color: var(--red);
+}
+
 .button,
 .ghost,
 .danger {

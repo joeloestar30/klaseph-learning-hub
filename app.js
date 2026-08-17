@@ -66,6 +66,9 @@ const seed = {
     { id: "n1", classId: "c1", message: "Bring recycled materials for Wednesday activity.", date: "2026-08-15" },
     { id: "n2", classId: "c2", message: "Read pages 12 to 15 before next meeting.", date: "2026-08-15" }
   ],
+  interventions: [
+    { id: "i1", studentId: "u3", classId: "c1", teacherId: "u1", reason: "Low quiz score", action: "Remediation task and short consultation", followUp: "2026-08-22", status: "pending", notes: "Review states of matter with examples from home.", createdAt: "2026-08-15" }
+  ],
   schools: [
     { id: "school-local", name: "San Isidro National High School", code: "SINHS", region: "Region IV-A", division: "Laguna", district: "District 1" }
   ],
@@ -89,6 +92,7 @@ const text = {
     activities: "Activities",
     exams: "Exams",
     records: "Records",
+    monitoring: "Student Monitoring",
     users: "Users",
     admin: "Admin",
     super_admin: "Super Admin",
@@ -132,6 +136,7 @@ const text = {
     activities: "Gawain",
     exams: "Exams",
     records: "Talaan",
+    monitoring: "Student Monitoring",
     users: "Users",
     admin: "Admin",
     super_admin: "Super Admin",
@@ -254,6 +259,7 @@ function migrate(data) {
       schools: data.schools?.length ? data.schools : structuredClone(seed.schools),
       adminInvites: data.adminInvites || [],
       auditLogs: data.auditLogs || [],
+      interventions: data.interventions || [],
       settings: {
         ...structuredClone(seed.settings),
         ...(data.settings || {})
@@ -292,6 +298,7 @@ async function loadCloudData(userId) {
   const inviteRows = await selectOptionalRows("admin_invites", "*");
   const auditRows = await selectOptionalRows("audit_logs", "*");
   const settingsRows = await selectOptionalRows("system_settings", "*");
+  const interventionRows = await selectOptionalRows("interventions", "*");
 
   state = {
     ...state,
@@ -308,6 +315,7 @@ async function loadCloudData(userId) {
     schools: schoolRows.map(mapSchool),
     adminInvites: inviteRows.map(mapAdminInvite),
     auditLogs: auditRows.map(mapAuditLog),
+    interventions: interventionRows.map(mapIntervention),
     settings: settingsRows[0] ? mapSettings(settingsRows[0]) : structuredClone(seed.settings)
   };
 
@@ -384,6 +392,21 @@ function mapSettings(row) {
     examGeneratorEnabled: row.exam_generator_enabled !== false,
     autoCheckEnabled: row.auto_check_enabled !== false,
     lateSubmissionsEnabled: row.late_submissions_enabled === true
+  };
+}
+
+function mapIntervention(row) {
+  return {
+    id: row.id,
+    studentId: row.student_id,
+    classId: row.class_id,
+    teacherId: row.teacher_id,
+    reason: row.reason || "",
+    action: row.action_taken || "",
+    followUp: row.follow_up_date || "",
+    status: row.status || "pending",
+    notes: row.notes || "",
+    createdAt: row.created_at
   };
 }
 
@@ -579,9 +602,9 @@ function render() {
 }
 
 function navItems() {
-  if (isAdmin()) return ["dashboard", "admin", "users", "classes", "activities", "exams", "records"];
+  if (isAdmin()) return ["dashboard", "admin", "users", "classes", "activities", "exams", "records", "monitoring"];
   return canTeach()
-    ? ["dashboard", "classes", "activities", "exams", "records", "users"]
+    ? ["dashboard", "classes", "activities", "exams", "records", "monitoring", "users"]
     : ["dashboard", "classes", "activities", "exams", "records"];
 }
 
@@ -591,6 +614,7 @@ function route() {
   if (state.view === "activities") return activitiesView();
   if (state.view === "exams") return examsView();
   if (state.view === "records") return recordsView();
+  if (state.view === "monitoring") return monitoringView();
   if (state.view === "users") return usersView();
   return dashboardView();
 }
@@ -792,6 +816,40 @@ function recordsView() {
       <div class="panel span-8">
         <div class="panel-title"><h3>${t("classRecord")}</h3><button class="ghost" id="exportCsv">CSV</button></div>
         <div class="table-wrap">${recordTable(submissions)}</div>
+      </div>
+    </section>
+  `;
+}
+
+function monitoringView() {
+  if (!canTeach()) return recordsView();
+  const learnerRows = monitoredLearners();
+  const riskCounts = learnerRows.reduce((counts, item) => {
+    counts[item.risk] = (counts[item.risk] || 0) + 1;
+    return counts;
+  }, {});
+  const selected = learnerRows[0];
+  return `
+    <section class="grid">
+      ${metric("High risk", riskCounts.high || 0, "Low score, missing work, or attendance concern")}
+      ${metric("Moderate risk", riskCounts.moderate || 0, "Needs follow-up")}
+      ${metric("On track", riskCounts.low || 0, "No urgent flags")}
+      ${metric("Interventions", teacherInterventions().length, "Logged support actions")}
+      <div class="panel span-8">
+        <div class="panel-title"><h3>Student Monitoring</h3><span class="muted">DepEd-aligned learner support view</span></div>
+        <div class="table-wrap">${monitoringTable(learnerRows)}</div>
+      </div>
+      <div class="composer span-4">
+        <div class="panel-title"><h3>Intervention Log</h3></div>
+        ${interventionForm(selected)}
+      </div>
+      <div class="panel span-7">
+        <div class="panel-title"><h3>Learning Progress Tracker</h3></div>
+        <div class="list">${learnerRows.map(learnerProgressCard).join("") || empty()}</div>
+      </div>
+      <div class="panel span-5">
+        <div class="panel-title"><h3>Recent Interventions</h3></div>
+        <div class="list">${teacherInterventions().slice(0, 6).map(interventionItem).join("") || empty()}</div>
       </div>
     </section>
   `;
@@ -1230,6 +1288,112 @@ function progressItems() {
   });
 }
 
+function monitoredLearners() {
+  const classes = teacherClasses();
+  const classIds = classes.map((item) => item.id);
+  const activities = state.activities.filter((item) => classIds.includes(item.classId) && !item.archivedAt);
+  const memberships = state.memberships.filter((m) => classIds.includes(m.classId));
+  const keys = new Set();
+  return memberships.map((m) => {
+    const key = `${m.classId}:${m.userId}`;
+    if (keys.has(key)) return null;
+    keys.add(key);
+    const learner = state.users.find((u) => u.id === m.userId);
+    const classItem = state.classes.find((c) => c.id === m.classId);
+    const classActivities = activities.filter((a) => a.classId === m.classId);
+    const learnerSubs = state.submissions.filter((s) => s.studentId === m.userId && classActivities.some((a) => a.id === s.activityId));
+    const scored = learnerSubs.filter((s) => s.score !== null && s.score !== undefined);
+    const average = scored.length ? Math.round(scored.reduce((sum, s) => sum + (Number(s.score || 0) / Math.max(Number(s.maxScore || 1), 1)) * 100, 0) / scored.length) : 0;
+    const missing = classActivities.filter((a) => !learnerSubs.some((s) => s.activityId === a.id)).length;
+    const lateOrAbsent = ["late", "absent"].includes(m.attendance);
+    const interventions = state.interventions.filter((item) => item.studentId === m.userId && item.classId === m.classId);
+    const components = componentSummary(classActivities, learnerSubs);
+    const flags = [
+      average && average < 75 ? "Below 75%" : "",
+      missing ? `${missing} missing` : "",
+      lateOrAbsent ? `Attendance: ${m.attendance}` : "",
+      interventions.some((item) => item.status !== "resolved") ? "Open intervention" : ""
+    ].filter(Boolean);
+    const risk = average && average < 75 || missing >= 2 || m.attendance === "absent" ? "high" : flags.length ? "moderate" : "low";
+    return {
+      learner,
+      classItem,
+      membership: m,
+      average,
+      missing,
+      submitted: learnerSubs.length,
+      totalActivities: classActivities.length,
+      components,
+      interventions,
+      flags,
+      risk
+    };
+  }).filter(Boolean);
+}
+
+function componentSummary(activities, submissions) {
+  return state.settings.gradingComponents.map((component) => {
+    const componentActivities = activities.filter((a) => (a.standard?.component || componentFromType(a.type)) === component);
+    const scored = submissions.filter((s) => componentActivities.some((a) => a.id === s.activityId) && s.score !== null && s.score !== undefined);
+    const average = scored.length ? Math.round(scored.reduce((sum, s) => sum + (Number(s.score || 0) / Math.max(Number(s.maxScore || 1), 1)) * 100, 0) / scored.length) : null;
+    return { component, average, scored: scored.length, total: componentActivities.length };
+  });
+}
+
+function componentFromType(type) {
+  if (type === "Exam" || type === "Quiz") return "Written Work";
+  if (type === "Assignment" || type === "Activity") return "Performance Task";
+  return state.settings.gradingComponents[0] || "Written Work";
+}
+
+function monitoringTable(rows) {
+  const body = rows.map((item) => {
+    const chipClass = item.risk === "high" ? "red" : item.risk === "moderate" ? "gold" : "green";
+    return `<tr><td>${esc(item.learner?.name || "Learner")}</td><td>${esc(item.classItem?.name || "Class")}</td><td><span class="chip ${chipClass}">${esc(item.risk)}</span></td><td>${item.average || "No scores"}${item.average ? "%" : ""}</td><td>${item.submitted}/${item.totalActivities}</td><td>${esc(item.membership.attendance)}</td><td>${item.flags.map((flag) => `<span class="chip gold">${esc(flag)}</span>`).join(" ") || `<span class="chip green">On track</span>`}</td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Learner</th><th>Class</th><th>Risk</th><th>Average</th><th>Submitted</th><th>Attendance</th><th>Flags</th></tr></thead><tbody>${body || `<tr><td colspan="7">${t("noItems")}</td></tr>`}</tbody></table>`;
+}
+
+function learnerProgressCard(item) {
+  const componentChips = item.components.map((part) => `<span class="chip ${part.average === null ? "" : part.average < 75 ? "gold" : "green"}">${esc(part.component)}: ${part.average === null ? "No score" : `${part.average}%`}</span>`).join("");
+  const status = item.risk === "high" ? "Needs Support" : item.risk === "moderate" ? "Developing" : "On Track";
+  return `
+    <article class="item">
+      <div class="item-head"><h4>${esc(item.learner?.name || "Learner")}</h4><span class="chip ${item.risk === "high" ? "red" : item.risk === "moderate" ? "gold" : "green"}">${status}</span></div>
+      <div class="muted">${esc(item.classItem?.name || "Class")} · ${item.submitted}/${item.totalActivities} submitted · ${item.missing} missing</div>
+      <div class="chips">${componentChips}</div>
+    </article>
+  `;
+}
+
+function interventionForm(selected) {
+  if (!selected) return empty();
+  return `
+    <form id="interventionForm" class="form-grid">
+      <label class="full">Learner<select name="studentClass" required>${monitoredLearners().map((item) => `<option value="${item.learner?.id}:${item.classItem?.id}">${esc(item.learner?.name || "Learner")} - ${esc(item.classItem?.name || "Class")}</option>`).join("")}</select></label>
+      <label class="full">Reason<select name="reason"><option>Low score</option><option>Missing task</option><option>Attendance concern</option><option>Literacy or numeracy support</option><option>Parent/guardian follow-up</option></select></label>
+      <label class="full">Action taken<textarea name="action" required placeholder="Remediation, consultation, parent contact, or learning task"></textarea></label>
+      <label>Follow-up date<input type="date" name="followUp" value="${new Date().toISOString().slice(0, 10)}"></label>
+      <label>Status<select name="status"><option value="pending">Pending</option><option value="improving">Improving</option><option value="resolved">Resolved</option></select></label>
+      <label class="full">Notes<textarea name="notes" placeholder="Teacher observation or next step"></textarea></label>
+      <button class="button full">Save intervention</button>
+    </form>
+  `;
+}
+
+function teacherInterventions() {
+  const classIds = teacherClasses().map((item) => item.id);
+  return state.interventions
+    .filter((item) => classIds.includes(item.classId))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+function interventionItem(item) {
+  const learner = state.users.find((u) => u.id === item.studentId);
+  const classItem = state.classes.find((c) => c.id === item.classId);
+  return `<article class="item"><div class="item-head"><h4>${esc(learner?.name || "Learner")}</h4><span class="chip ${item.status === "resolved" ? "green" : "gold"}">${esc(item.status)}</span></div><div class="muted">${esc(classItem?.name || "Class")} · ${esc(item.reason)} · Follow-up ${esc(item.followUp || "not set")}</div><div class="muted">${esc(item.action)}</div></article>`;
+}
+
 function recordTable(submissions) {
   const rows = submissions.map((s) => {
     const activity = state.activities.find((a) => a.id === s.activityId);
@@ -1517,6 +1681,7 @@ function bind() {
   document.querySelector("#enrollmentForm")?.addEventListener("submit", saveEnrollment);
   document.querySelector("#announcementForm")?.addEventListener("submit", saveAnnouncement);
   document.querySelector("#settingsForm")?.addEventListener("submit", saveSettings);
+  document.querySelector("#interventionForm")?.addEventListener("submit", saveIntervention);
   document.querySelector("#schoolForm")?.addEventListener("submit", saveSchool);
   document.querySelector("#adminInviteForm")?.addEventListener("submit", saveAdminInvite);
   document.querySelector("#refreshCloud")?.addEventListener("click", refreshCloudData);
@@ -1959,6 +2124,48 @@ async function saveSettings(event) {
   persist();
   render();
   toast("Settings saved.");
+}
+
+async function saveIntervention(event) {
+  event.preventDefault();
+  if (!canTeach()) return toast("Teacher access is required.");
+  const data = Object.fromEntries(new FormData(event.target));
+  const [studentId, classId] = String(data.studentClass || "").split(":");
+  const classItem = state.classes.find((item) => item.id === classId);
+  const intervention = {
+    id: crypto.randomUUID(),
+    studentId,
+    classId,
+    teacherId: classItem?.teacherId || user().id,
+    reason: data.reason,
+    action: data.action,
+    followUp: data.followUp,
+    status: data.status,
+    notes: data.notes,
+    createdAt: new Date().toISOString()
+  };
+  if (cloudMode) {
+    const { error } = await sb.from("interventions").insert({
+      id: intervention.id,
+      student_id: intervention.studentId,
+      class_id: intervention.classId,
+      teacher_id: intervention.teacherId,
+      reason: intervention.reason,
+      action_taken: intervention.action,
+      follow_up_date: intervention.followUp || null,
+      status: intervention.status,
+      notes: intervention.notes || null
+    });
+    if (error) return toast(error.message);
+    await logAdminAction("create_intervention", "interventions", intervention.id, intervention);
+    await loadCloudData(user().id);
+  } else {
+    state.interventions.unshift(intervention);
+    addLocalAudit("create_intervention", "interventions", intervention.id, intervention);
+  }
+  persist();
+  render();
+  toast("Intervention logged.");
 }
 
 async function refreshCloudData() {
