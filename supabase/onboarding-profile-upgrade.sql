@@ -20,9 +20,8 @@ create table if not exists public.profile_onboarding (
   updated_at timestamptz not null default now()
 );
 
-create unique index if not exists idx_profile_onboarding_lrn_unique
-on public.profile_onboarding (lrn)
-where lrn is not null and btrim(lrn) <> '';
+-- LRN is intentionally not unique at public signup. It is user-entered and optional;
+-- schools should verify it before using it as an authoritative learner identifier.
 
 alter table public.profile_onboarding enable row level security;
 
