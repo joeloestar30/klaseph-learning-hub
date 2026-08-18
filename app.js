@@ -2,6 +2,16 @@ const STORE_KEY = "klaseph-hub-v2-state";
 const cfg = window.KLASEPH_CONFIG || {};
 const cloudConfigured = Boolean(cfg.SUPABASE_URL && cfg.SUPABASE_PUBLISHABLE_KEY && window.supabase);
 const sb = cloudConfigured ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY) : null;
+const EXAM_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+const EXAM_UPLOAD_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.csv";
+const EXAM_UPLOAD_TYPES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv"
+]);
 let cloudMode = cloudConfigured;
 let booting = cloudMode;
 let cloudError = "";
@@ -782,9 +792,13 @@ function examsView() {
         <div class="panel-title"><h3>${t("generateExam")}</h3></div>
         ${examGeneratorForm()}
       </div>
+      <div class="composer span-5">
+        <div class="panel-title"><h3>Upload exam draft</h3></div>
+        ${examUploadForm()}
+      </div>
       <div class="panel span-7">
-        <div class="panel-title"><h3>Auto-check exams</h3></div>
-        <div class="list">${myActivities().filter((a) => a.mode === "auto").map(activityItem).join("") || empty()}</div>
+        <div class="panel-title"><h3>Exam workspace</h3></div>
+        <div class="list">${myActivities().filter((a) => a.type === "Exam").map(activityItem).join("") || empty()}</div>
       </div>
     </section>
   ` : `
@@ -795,7 +809,7 @@ function examsView() {
       </div>
       <div class="panel span-7">
         <div class="panel-title"><h3>Available exams</h3></div>
-        <div class="list">${myActivities().filter((a) => a.mode === "auto").map(activityItem).join("") || empty()}</div>
+        <div class="list">${availableExamActivities().map(activityItem).join("") || empty()}</div>
       </div>
     </section>
   `;
@@ -1204,8 +1218,34 @@ function examGeneratorForm() {
   `;
 }
 
+function examUploadForm() {
+  return `
+    <form id="examUploadForm" class="form-grid">
+      <label class="full">Exam title<input name="title" required placeholder="Quarter 1 Long Test"></label>
+      <label>Class<select name="classId" required>${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label>
+      <label>Due date<input type="date" name="due" required value="2026-08-22"></label>
+      <label>Grade level<select name="grade"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option><option selected>Grade 7</option><option>Grade 8</option><option>Grade 9</option><option>Grade 10</option><option>Grade 11</option><option>Grade 12</option></select></label>
+      <label>Quarter<select name="quarter"><option>Quarter 1</option><option>Quarter 2</option><option>Quarter 3</option><option>Quarter 4</option></select></label>
+      <label>Subject<select name="subject"><option>Science</option><option>Mathematics</option><option>Filipino</option><option>English</option><option>Araling Panlipunan</option></select></label>
+      <label>Assessment component<select name="component"><option>Written Work</option><option>Quarterly Assessment</option><option>Formative Check</option></select></label>
+      <label>Time limit<input type="number" name="timeLimit" min="0" value="60" placeholder="Minutes"></label>
+      <label>Total points<input type="number" name="points" min="1" value="50"></label>
+      <label>Availability<select name="status"><option value="Draft" selected>Draft</option><option value="Open">Open to students</option></select></label>
+      <label class="full">Exam file<input type="file" name="examFile" accept="${EXAM_UPLOAD_ACCEPT}" required></label>
+      <label class="full">Teacher notes<textarea name="instructions" placeholder="Directions, reminders, or answer sheet instructions for learners."></textarea></label>
+      <div class="standard-box full">
+        <b>Draft upload</b>
+        <span>PDF, Word, Excel, or CSV only. Maximum file size is 2 MB in this browser build. Keep new uploads as drafts until they are reviewed and ready.</span>
+      </div>
+      <button class="button full">Upload exam draft</button>
+    </form>
+  `;
+}
+
 function submissionForm(examsOnly) {
-  const activities = myActivities().filter((item) => examsOnly ? item.mode === "auto" : item.mode !== "auto");
+  const activities = examsOnly
+    ? availableExamActivities()
+    : myActivities().filter((item) => item.type !== "Exam" && item.mode !== "auto");
   const selected = activities[0];
   if (!selected) return empty();
   return `
@@ -1218,6 +1258,16 @@ function submissionForm(examsOnly) {
 }
 
 function answerFields(activity) {
+  if (activity.type === "Exam" && activity.standard?.upload) {
+    return `
+      <div class="standard-box">
+        <b>${esc(activity.standard.upload.fileName)}</b>
+        <span>${esc(formatBytes(activity.standard.upload.fileSize))} · ${esc(activity.standard.timeLimit ? `${activity.standard.timeLimit} minutes` : "No time limit set")}</span>
+        ${examFileLink(activity, "Open exam file")}
+      </div>
+      <label>Answer<textarea name="response" required placeholder="Type your answers or submission notes here."></textarea></label>
+    `;
+  }
   if (activity.mode !== "auto") {
     return `<label>Answer<textarea name="response" required placeholder="Type your answer here."></textarea></label>`;
   }
@@ -1254,12 +1304,16 @@ function activityItem(item) {
   const className = state.classes.find((c) => c.id === item.classId)?.name || "Class";
   const submissions = state.submissions.filter((s) => s.activityId === item.id);
   const standard = item.standard ? `${item.standard.grade} · ${item.standard.quarter} · ${item.standard.component}` : "Classroom task";
+  const upload = item.standard?.upload;
+  const badge = item.mode === "auto" ? "Auto-check" : upload ? "Uploaded file" : "Manual";
+  const badgeClass = item.mode === "auto" ? "green" : upload ? "gold" : "gold";
   return `
     <article class="item">
-      <div class="item-head"><h4>${esc(item.title)}</h4><span class="chip ${item.mode === "auto" ? "green" : "gold"}">${item.mode === "auto" ? "Auto-check" : "Manual"}</span></div>
+      <div class="item-head"><h4>${esc(item.title)}</h4><span class="chip ${badgeClass}">${badge}</span></div>
       <div class="muted">${esc(className)} · ${esc(item.type)} · Due ${esc(item.due)}</div>
       <div class="muted">${esc(standard)}</div>
-      <div class="chips"><span class="chip">${totalPoints(item)} pts</span><span class="chip green">${submissions.length} submissions</span><span class="chip gold">${item.questions?.length || 1} item/s</span></div>
+      ${upload ? `<div class="muted">${esc(upload.fileName)} · ${esc(formatBytes(upload.fileSize))}</div>` : ""}
+      <div class="chips"><span class="chip">${esc(item.status || "Open")}</span><span class="chip">${totalPoints(item)} pts</span><span class="chip green">${submissions.length} submissions</span><span class="chip gold">${item.questions?.length || 1} item/s</span>${upload ? examFileLink(item, "File") : ""}</div>
     </article>
   `;
 }
@@ -1440,7 +1494,7 @@ function adminEnrollmentTable() {
 function adminContentTable() {
   const rows = state.activities.map((a) => {
     const classItem = state.classes.find((item) => item.id === a.classId);
-    return `<tr><td>${esc(a.title)}</td><td>${esc(classItem?.name || "Class")}</td><td>${esc(a.type)}</td><td><select class="compact-select" data-activity-status="${a.id}">${["Open", "Closed", "Archived"].map((status) => `<option value="${status}" ${(a.archivedAt ? "Archived" : a.status) === status ? "selected" : ""}>${status}</option>`).join("")}</select></td><td>${esc(a.due || "")}</td><td>${totalPoints(a)}</td><td><div class="row-actions"><button class="ghost" data-save-activity-status="${a.id}">Save</button><button class="danger" data-archive-activity="${a.id}" ${a.archivedAt ? "disabled" : ""}>Archive</button></div></td></tr>`;
+    return `<tr><td>${esc(a.title)}</td><td>${esc(classItem?.name || "Class")}</td><td>${esc(a.type)}</td><td><select class="compact-select" data-activity-status="${a.id}">${["Draft", "Open", "Closed", "Archived"].map((status) => `<option value="${status}" ${(a.archivedAt ? "Archived" : a.status) === status ? "selected" : ""}>${status}</option>`).join("")}</select></td><td>${esc(a.due || "")}</td><td>${totalPoints(a)}</td><td><div class="row-actions"><button class="ghost" data-save-activity-status="${a.id}">Save</button><button class="danger" data-archive-activity="${a.id}" ${a.archivedAt ? "disabled" : ""}>Archive</button></div></td></tr>`;
   }).join("");
   return `<table><thead><tr><th>Title</th><th>Class</th><th>Type</th><th>Status</th><th>Due</th><th>Points</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="7">${t("noItems")}</td></tr>`}</tbody></table>`;
 }
@@ -1674,6 +1728,7 @@ function bind() {
   document.querySelector("#classForm")?.addEventListener("submit", saveClass);
   document.querySelector("#activityForm")?.addEventListener("submit", saveActivity);
   document.querySelector("#examForm")?.addEventListener("submit", saveGeneratedExam);
+  document.querySelector("#examUploadForm")?.addEventListener("submit", saveUploadedExam);
   document.querySelector("#submissionForm")?.addEventListener("submit", saveSubmission);
   document.querySelector("#userForm")?.addEventListener("submit", saveUser);
   document.querySelector("#adminCreateUserForm")?.addEventListener("submit", saveUser);
@@ -1835,6 +1890,61 @@ async function saveGeneratedExam(event) {
   persist();
   render();
   toast(`${questions.length} DepEd-aligned auto-check items generated.`);
+}
+
+async function saveUploadedExam(event) {
+  event.preventDefault();
+  const formData = new FormData(event.target);
+  const data = Object.fromEntries(formData);
+  const file = formData.get("examFile");
+  if (!file || !file.name) return toast("Choose an exam file to upload.");
+  if (!isAllowedExamFile(file)) return toast("Use PDF, Word, Excel, or CSV exam files only.");
+  if (file.size > EXAM_UPLOAD_MAX_BYTES) return toast("Exam file must be 2 MB or smaller.");
+
+  const classItem = state.classes.find((item) => item.id === data.classId);
+  if (!classItem) return toast("Choose a class for this exam.");
+
+  let upload;
+  try {
+    upload = await readExamUpload(file);
+  } catch (error) {
+    console.warn("Exam upload read failed:", error);
+    return toast("The exam file could not be read.");
+  }
+  const standard = {
+    grade: data.grade,
+    quarter: data.quarter,
+    subject: data.subject,
+    component: data.component,
+    timeLimit: Number(data.timeLimit || 0),
+    source: "Teacher upload",
+    upload
+  };
+  const instructions = data.instructions || "Open the uploaded exam file and follow the teacher's directions.";
+  const activity = {
+    id: crypto.randomUUID(),
+    classId: data.classId,
+    teacherId: isAdmin() ? classItem?.teacherId || user().id : user().id,
+    title: data.title,
+    type: "Exam",
+    mode: "manual",
+    due: data.due,
+    status: data.status === "Open" ? "Open" : "Draft",
+    instructions,
+    standard,
+    questions: [{ id: crypto.randomUUID(), type: "essay", prompt: instructions, points: Number(data.points || 1), answer: "" }]
+  };
+
+  if (cloudMode) {
+    const { error } = await sb.from("activities").insert(toActivityRow(activity));
+    if (error) return toast(error.message);
+    await loadCloudData(user().id);
+  } else {
+    state.activities.unshift(activity);
+  }
+  persist();
+  render();
+  toast(activity.status === "Open" ? "Exam uploaded and opened to students." : "Exam uploaded as a draft.");
 }
 
 async function saveSubmission(event) {
@@ -2594,6 +2704,44 @@ function uniqueCode(source) {
   let code = source.replace(/[^a-z0-9]/gi, "").slice(0, 4).toUpperCase() + Math.floor(Math.random() * 90 + 10);
   while (state.classes.some((item) => item.code === code)) code = code.slice(0, 4) + Math.floor(Math.random() * 90 + 10);
   return code;
+}
+
+function availableExamActivities() {
+  return myActivities().filter((item) => item.type === "Exam" && item.status === "Open");
+}
+
+function isAllowedExamFile(file) {
+  const name = file.name.toLowerCase();
+  const allowedExtension = EXAM_UPLOAD_ACCEPT.split(",").some((ext) => name.endsWith(ext));
+  return allowedExtension && (!file.type || EXAM_UPLOAD_TYPES.has(file.type));
+}
+
+function readExamUpload(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({
+      fileName: file.name,
+      fileType: file.type || "application/octet-stream",
+      fileSize: file.size,
+      dataUrl: reader.result,
+      uploadedAt: new Date().toISOString()
+    });
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function examFileLink(activity, label) {
+  const upload = activity.standard?.upload;
+  if (!upload?.dataUrl) return "";
+  return `<a class="chip" href="${esc(upload.dataUrl)}" download="${esc(upload.fileName)}">${esc(label)}</a>`;
+}
+
+function formatBytes(bytes) {
+  const size = Number(bytes || 0);
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 102.4) / 10} KB`;
+  return `${Math.round(size / 1024 / 102.4) / 10} MB`;
 }
 
 function totalPoints(activity) {
