@@ -1,6 +1,14 @@
 (() => {
+  let signupSchoolLoadAttempts = 0;
+
   async function loadSignupSchools() {
-    if (!cloudMode || !sb || user()) return;
+    if (!cloudMode || !sb) return;
+    if (booting) {
+      if (signupSchoolLoadAttempts++ < 20) setTimeout(loadSignupSchools, 100);
+      return;
+    }
+    if (user()) return;
+
     try {
       const { data, error } = await sb.rpc("list_signup_schools");
       if (error) {
