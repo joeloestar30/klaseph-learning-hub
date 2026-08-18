@@ -472,6 +472,10 @@ button {
   color: var(--red);
 }
 
+a.chip {
+  text-decoration: none;
+}
+
 .button,
 .ghost,
 .danger {
