@@ -1,0 +1,12 @@
+{
+  "frontend": "https://joyteam-neon.vercel.app",
+  "provider": "Vercel",
+  "plan": "Hobby",
+  "project": "joyteam-neon",
+  "deploymentMethod": "static-upload",
+  "neonProject": "damp-rice-42686167",
+  "neonBranch": "br-jolly-sky-aeixjgkm",
+  "neonPlan": "Free",
+  "originalApp": "https://joyteam.vercel.app",
+  "originalAppUnchanged": true
+}

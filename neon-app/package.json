@@ -1,0 +1,14 @@
+{
+  "name": "klaseph-neon",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/serve.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": { "@neondatabase/neon-js": "0.7.0-beta" },
+  "devDependencies": { "@electric-sql/pglite": "0.5.8", "esbuild": "0.28.2" }
+}

@@ -1,0 +1,22 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const read = name => readFile(`../supabase/${name}.sql`,'utf8');
+let base = await read('schema');
+base = base.slice(0,base.indexOf('create or replace function public.handle_new_user()')) + base.slice(base.indexOf('create or replace function public.is_super_admin()'));
+base = base.replace('references auth.users(id) on delete cascade','');
+const onboarding = (await read('onboarding-profile-upgrade')).split('-- Replace the signup trigger')[0];
+let sql = [base,await read('rls-recursion-fix'),await read('admin-role-fix'),await read('production-db-upgrade'),await read('admin-dashboard-upgrade'),onboarding].join('\n');
+sql = sql.replaceAll('create extension if not exists pgcrypto;','').replaceAll('auth.uid()', '(auth.user_id())::uuid');
+sql = sql.replaceAll('to anon, authenticated','to authenticated');
+// Internal policy lookups live outside the API's exposed public schema.
+const helpers = ['is_super_admin','is_class_teacher','is_class_member','is_school_admin','can_manage_school','is_exam_teacher','can_access_exam'];
+for (const name of helpers) sql = sql.replaceAll(`public.${name}`,`private.${name}`);
+sql = sql.replaceAll('set search_path = public','set search_path = public, pg_temp');
+const preamble = `-- Run once on a NEW Neon database after enabling Neon Auth and Data API.\n-- Apply as database owner. Never run against the existing Supabase project.\nbegin;\ncreate schema if not exists private;\nrevoke all on schema private from public;\ngrant usage on schema private to authenticated;\n`;
+const identity = await readFile('database/identity.sql','utf8');
+let body = sql+'\n'+await readFile('database/hardening.sql','utf8');
+body = body.replaceAll('(auth.user_id())::uuid', 'private.actor_id()');
+body = body.replace('actor uuid := private.actor_id();', 'actor uuid := coalesce(private.claim_profile(), (auth.user_id())::uuid);');
+body = body.replace('where id::text = actor::text;', 'where id::text = auth.user_id();');
+body = body.replace('if exists(select 1 from public.profiles where id = actor) then return; end if;', "if exists(select 1 from public.profiles where id = actor) then return; end if;");
+body = body.replace("if invitation.id is not null then update public.admin_invites", "insert into private.identity_links(neon_user_id,profile_id) values(auth.user_id(),actor);\n  if invitation.id is not null then update public.admin_invites");
+await writeFile('database/schema.sql',preamble+identity+'\n'+body+'\n'+await readFile('database/identity-rpc.sql','utf8')+'\ncommit;\n');
