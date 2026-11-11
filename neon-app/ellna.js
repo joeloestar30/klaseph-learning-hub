@@ -7,6 +7,7 @@
     ['Additional information', [['special_class','Special class membership','select','None|Special Science Class|Special Education Class|Class Under MISOSA|Class in BRAC|ALIVE/Madrasah|Other'],['four_ps','Family recipient of 4Ps?','select',"Yes|No|I don’t know"]]]
   ];
   let current = {}, saved = [], owner = null;
+  const isStudent = () => role() === 'student';
   const e = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function years() {
     const y = new Date().getFullYear();
@@ -20,7 +21,8 @@
   }
   window.ellnaView = () => {
     if(owner!==user().id) {owner=user().id;current={};saved=[];}
-    return `<section class="card ellna"><h2>ELLNA Forms</h2><p>Enter once, then print a readable record or a reconstructed bubble sheet.</p><div class="ellna-tools"><button class="ghost" id="ellnaLoad">Load saved forms</button><select id="ellnaSaved" aria-label="Saved forms"><option value="">Choose a saved form…</option>${saved.map((r,i)=>`<option value="${i}">${e(r.payload.last_name)}, ${e(r.payload.first_name)} · ${e(r.school_year)}</option>`).join('')}</select><button class="ghost" id="ellnaNew">New form</button></div><form id="ellnaForm"><fieldset><legend>Assessment</legend><div class="form-grid"><label>School year<select name="school_year">${years().map(y=>`<option ${y===(current.school_year||state.settings.schoolYear)?'selected':''}>${e(y)}</option>`).join('')}</select></label><label>Assessment date<input type="date" name="assessment_date" value="${e(current.assessment_date||'')}" required></label></div><p>Grade 3 completion refers to the school year immediately before the selected year.</p></fieldset>${fields.map(([title,items])=>`<fieldset><legend>${title}</legend><div class="form-grid">${items.map(input).join('')}</div></fieldset>`).join('')}<div class="ellna-tools"><button class="button" type="submit">Save draft</button><button class="ghost" type="button" data-ellna-print="clean">Print clean form / PDF</button><button class="ghost" type="button" data-ellna-print="bubble">Print bubble sheet / PDF</button></div><p id="ellnaMessage" role="status"></p><p class="muted">Bubble sheet recreated from a photograph. Scanner compatibility is not certified. Print at 100% scale.</p></form></section>`;
+    const submitted=current._status==='submitted';
+    return `<section class="card ellna ${isStudent()?'student-ellna':''}"><h2>${isStudent()?'Student ELLNA Form':'ELLNA Forms'}</h2><p>${isStudent()?'Complete the form on this tablet, save if you need to continue later, then submit it to your school.':'Enter once, review student submissions, then print a readable record or reconstructed bubble sheet.'}</p><div class="ellna-tools"><button class="ghost" id="ellnaLoad">Load saved forms</button><select id="ellnaSaved" aria-label="Saved forms"><option value="">Choose a saved form…</option>${saved.map((r,i)=>`<option value="${i}">${e(r.payload.last_name)}, ${e(r.payload.first_name)} · ${e(r.school_year)}${r.payload._status==='submitted'?' · Submitted':''}</option>`).join('')}</select><button class="ghost" id="ellnaNew">New form</button></div>${submitted?'<div class="submission-banner">Submitted to KlasePH. This copy is read-only.</div>':''}<form id="ellnaForm"><fieldset ${submitted?'disabled':''}><legend>Assessment</legend><div class="form-grid"><label>School year<select name="school_year">${years().map(y=>`<option ${y===(current.school_year||state.settings.schoolYear)?'selected':''}>${e(y)}</option>`).join('')}</select></label><label>Assessment date<input type="date" name="assessment_date" value="${e(current.assessment_date||'')}" required></label></div><p>Grade 3 completion refers to the school year immediately before the selected year.</p></fieldset>${fields.map(([title,items])=>`<fieldset ${submitted?'disabled':''}><legend>${title}</legend><div class="form-grid">${items.map(input).join('')}</div></fieldset>`).join('')}<div class="ellna-tools">${submitted?'':`<button class="ghost" type="submit" name="intent" value="draft">Save draft</button>${isStudent()?'<button class="button" type="submit" name="intent" value="submit">Submit to school</button>':'<button class="button" type="submit" name="intent" value="draft">Save form</button>'}`}${!isStudent()?'<button class="ghost" type="button" data-ellna-print="clean">Print clean form / PDF</button><button class="ghost" type="button" data-ellna-print="bubble">Print bubble sheet / PDF</button>':''}</div><p id="ellnaMessage" role="status"></p>${!isStudent()?'<p class="muted">Bubble sheet recreated from a photograph. Scanner compatibility is not certified. Print at 100% scale.</p>':''}</form></section>`;
   };
   async function loadSaved() {
     if(cloudMode) {
@@ -101,10 +103,13 @@
       event.preventDefault();const button=event.submitter;button.disabled=true;
       try {
         const d=valueForm();if(age(d)<0) throw new Error('Birth date must be before the assessment date.');
+        const submitting=event.submitter?.value==='submit';
+        d._status=submitting?'submitted':'draft';
+        d._submitted_at=submitting?new Date().toISOString():(current._submitted_at||null);
         const id=d.id||crypto.randomUUID();const row={id,owner_id:owner,school_year:d.school_year,payload:d,updated_at:new Date().toISOString()};
         if(cloudMode){const {error}=await sb.from('ellna_forms').upsert(row);if(error)throw error;}
         else {await loadSaved();saved=saved.filter(r=>r.id!==id);saved.push(row);localStorage.setItem('ellna-demo-'+owner,JSON.stringify(saved));}
-        current={...d,id};message('Draft saved.');
+        current={...d,id};message(submitting?'Form submitted to your school.':'Draft saved.');
       }catch(err){message('Not saved: '+err.message);}finally{button.disabled=false;}
     };
     document.querySelectorAll('[data-ellna-print]').forEach(button=>button.onclick=()=>{

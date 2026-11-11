@@ -623,11 +623,11 @@ function navItems() {
   if (isAdmin()) return ["dashboard", "admin", "users", "classes", "activities", "exams", "records", "monitoring", "ellna"];
   return canTeach()
     ? ["dashboard", "classes", "activities", "exams", "records", "monitoring", "users", "ellna"]
-    : ["dashboard", "classes", "activities", "exams", "records"];
+    : ["dashboard", "classes", "activities", "exams", "records", "ellna"];
 }
 
 function route() {
-  if (state.view === 'ellna' && (isAdmin() || canTeach())) return window.ellnaView ? window.ellnaView() : '';
+  if (state.view === 'ellna') return window.ellnaView ? window.ellnaView() : '';
   if (state.view === "admin") return adminUsersView();
   if (state.view === "classes") return classesView();
   if (state.view === "activities") return activitiesView();

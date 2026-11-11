@@ -10,7 +10,7 @@ alter table public.ellna_forms enable row level security;
 create policy ellna_read on public.ellna_forms for select to authenticated
 using(private.is_active() and (owner_id=private.actor_id() or private.is_super_admin()));
 create policy ellna_create on public.ellna_forms for insert to authenticated
-with check(private.is_active() and private.is_teacher() and owner_id=private.actor_id());
+with check(private.is_active() and owner_id=private.actor_id());
 create policy ellna_edit on public.ellna_forms for update to authenticated
 using(private.is_active() and (owner_id=private.actor_id() or private.is_super_admin()))
 with check(private.is_active() and (owner_id=private.actor_id() or private.is_super_admin()));
