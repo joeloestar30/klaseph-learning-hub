@@ -38,13 +38,54 @@
     const chars=Array.from(String(value||'').toUpperCase());
     return `<div class="bubble-block"><b>${e(label)}</b><div class="bubble-columns">${Array.from({length:count},(_,i)=>`<div class="bubble-column"><div class="letter">${e(chars[i]||'')}</div>${Array.from(alphabet).map(c=>`<span class="bubble ${chars[i]===c?'filled':''}">${e(c)}</span>`).join('')}</div>`).join('')}</div></div>`;
   }
+  function photoNameGrid(d) {
+    const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const columns=[
+      ...Array.from({length:15},(_,i)=>({group:'LAST NAME',char:Array.from(String(d.last_name||'').toUpperCase())[i]||''})),
+      ...Array.from({length:20},(_,i)=>({group:'FIRST NAME',char:Array.from(String(d.first_name||'').toUpperCase())[i]||''})),
+      ...Array.from({length:2},(_,i)=>({group:'MI',char:Array.from(String(d.middle_initial||'').toUpperCase())[i]||''}))
+    ];
+    const groupHeader=`<div class="photo-groups"><b style="grid-column:span 15">LAST NAME</b><b style="grid-column:span 20">FIRST NAME</b><b style="grid-column:span 2">MI</b></div>`;
+    const boxes=`<div class="photo-row photo-boxes">${columns.map(c=>`<i>${e(c.char)}</i>`).join('')}</div>`;
+    const rows=Array.from(alphabet,letter=>`<div class="photo-row">${columns.map(c=>`<span class="photo-bubble ${c.char===letter?'filled':''}">${letter}</span>`).join('')}</div>`).join('');
+    return `<section class="photo-names">${groupHeader}${boxes}${rows}</section>`;
+  }
+  function optionPanel(title,items,value) {
+    return `<section class="photo-panel"><b class="panel-title">${e(title)}</b>${items.map(item=>`<div class="choice-line"><span class="choice-bubble ${value===item?'filled':''}"></span>${e(item)}</div>`).join('')}</section>`;
+  }
+  function photoBubbleSheet(d,prior) {
+    const birth=(d.birth_date||'').replaceAll('-','');
+    return `<main class="photo-sheet">
+      <header class="photo-header"><b>BUREAU OF EDUCATION ASSESSMENT</b><strong>EARLY LANGUAGE LITERACY AND NUMERACY ASSESSMENT (ELLNA)</strong><span>School Year ${e(d.school_year)}</span></header>
+      <div class="written-name"><b>LAST NAME:</b><span>${e(d.last_name)}</span><b>FIRST NAME:</b><span>${e(d.first_name)}</span><b>MI:</b><span>${e(d.middle_initial)}</span></div>
+      ${photoNameGrid(d)}
+      <div class="photo-lower">
+        <div class="lower-left">
+          <div class="mini-row">${bubbles('BIRTH DATE (YYYYMMDD)',birth,8)}${bubbles('AGE',age(d),2)}</div>
+          ${optionPanel('GENDER',['Boy','Girl'],d.gender)}
+          ${optionPanel('SPECIAL CLASS',['None','Special Science Class','Special Education Class','Class Under MISOSA','Class in BRAC','ALIVE/Madrasah','Other'],d.special_class)}
+        </div>
+        <div class="lower-middle">
+          <div class="mini-row">${bubbles('REGION',d.region,2)}${bubbles('DIVISION',d.division,3)}</div>
+          <div class="mini-row">${bubbles('SCHOOL ID (G4)',d.school_id_g4,6)}${bubbles('SCHOOL ID (G3)',d.school_id_g3,6)}</div>
+          ${optionPanel('SCHOOL TYPE (GRADE 4)',['Central / Pilot Elementary School','Non-Central Elementary School','Private School','Multigrade School','State College/University'],d.school_type)}
+        </div>
+        <div class="lower-right">
+          <div class="mini-row">${bubbles('GRADE 3 CLASS',d.class_size,2)}${bubbles('ENGLISH',d.english,3)}${bubbles('FILIPINO',d.filipino,3)}${bubbles('MOTHER TONGUE',d.mother_tongue,3)}${bubbles('MATH',d.math,3)}</div>
+          ${bubbles('LEARNER REFERENCE NUMBER (LRN)',d.lrn,12)}
+          <div class="mini-row">${optionPanel(`COMPLETED GRADE 3 IN SY ${prior}`,['Yes','No','I don’t know'],d.completed_g3)}${optionPanel('4Ps FAMILY',['Yes','No','I don’t know'],d.four_ps)}</div>
+        </div>
+      </div>
+      <footer>Digital reconstruction for A4 printing · Print at Actual size / 100% · Optical-scanner compatibility is not certified.</footer>
+    </main>`;
+  }
   function printable(d,mode) {
     const start=Number(d.school_year.split('-')[0]), prior=`${start-1}-${start}`;
     const header=`<h1>EARLY LANGUAGE LITERACY AND NUMERACY ASSESSMENT</h1><h2>Learner information · SY ${e(d.school_year)}</h2><p>Assessment date: ${e(d.assessment_date)} · Grade 3 completion year: ${prior} · Age on assessment date: ${age(d)}</p>`;
     const details=fields.map(([title,items])=>`<section><h3>${e(title)}</h3><dl>${items.map(([k,label])=>`<div><dt>${e(label)}</dt><dd>${e(d[k]||'—')}</dd></div>`).join('')}</dl></section>`).join('');
     const alpha='ABCDEFGHIJKLMNÑOPQRSTUVWXYZ -';
-    const sheet=mode==='bubble'?`<div class="names">${bubbles('LAST NAME',d.last_name,Math.max(15,Array.from(d.last_name).length),alpha)}${bubbles('FIRST NAME',d.first_name,Math.max(20,Array.from(d.first_name).length),alpha)}${bubbles('MI',d.middle_initial,2,alpha)}</div><div class="number-groups">${bubbles('School ID (G4)',d.school_id_g4,6)}${bubbles('School ID (G3)',d.school_id_g3,6)}${bubbles('LRN',d.lrn,12)}${bubbles('Age',age(d),2)}${bubbles('Class size',d.class_size,2)}</div><div class="number-groups">${bubbles('Birth date YYYYMMDD',(d.birth_date||'').replaceAll('-',''),8)}${['english','filipino','mother_tongue','math'].map(k=>bubbles(k.replace('_',' '),d[k],3)).join('')}</div><div class="choices">${all.filter(x=>x[2]==='select').map(([k,l,,opts])=>`<section><b>${e(l)}</b>${opts.split('|').map(o=>`<div><span class="bubble ${d[k]===o?'filled':''}">${d[k]===o?'●':' '}</span> ${e(o)}</div>`).join('')}</section>`).join('')}</div><p>Region: ${e(d.region)} · Division: ${e(d.division)}</p>`:details;
-    return `<!doctype html><html><head><meta charset="utf-8"><title>ELLNA ${e(d.last_name)} ${e(d.school_year)}</title><style>@page{size:A4 portrait;margin:10mm}body{font:11px Arial;color:#000}h1{font-size:15px;text-align:center}h2{font-size:13px;text-align:center}h3{font-size:12px;background:#eee;padding:5px}section{break-inside:avoid}dl{display:grid;grid-template-columns:1fr 1fr;gap:8px}dl div{border-bottom:1px solid #bbb;padding:5px}dt{font-size:10px}dd{margin:3px 0;font-weight:bold}.names,.number-groups{display:flex;gap:5px;margin:8px 0;justify-content:space-between}.bubble-block{border:1px solid;padding:3px;min-width:0}.bubble-block b{font-size:9px}.bubble-columns{display:flex}.bubble-column{display:flex;flex-direction:column;align-items:center;gap:1px;flex:1}.letter{border:1px solid;width:12px;height:14px;text-align:center}.bubble{display:inline-flex;border:1px solid;border-radius:50%;height:11px;width:11px;align-items:center;justify-content:center;font-size:8px;flex:none}.filled{background:#000!important;color:white!important;print-color-adjust:exact;-webkit-print-color-adjust:exact}.choices{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.choices section{border:1px solid;padding:4px}.choices div{margin-top:3px}footer{margin-top:12px;font-size:9px}.print{margin:12px}@media print{.print{display:none}}</style></head><body><button class="print" onclick="window.print()">Print / Save as PDF</button>${header}${sheet}<footer>KlasePH digital reconstruction · ${mode==='bubble'?'Not certified for official optical scanning.':''} Form version 1 · School year ${e(d.school_year)}</footer></body></html>`;
+    const sheet=mode==='bubble'?photoBubbleSheet(d,prior):details;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>ELLNA ${e(d.last_name)} ${e(d.school_year)}</title><style>@page{size:A4 portrait;margin:10mm}*{box-sizing:border-box}body{margin:0;font:10px Arial;color:#000}.clean{font-size:11px}h1{font-size:15px;text-align:center}h2{font-size:13px;text-align:center}h3{font-size:12px;background:#eee;padding:5px}section{break-inside:avoid}dl{display:grid;grid-template-columns:1fr 1fr;gap:8px}dl div{border-bottom:1px solid #bbb;padding:5px}dt{font-size:10px}dd{margin:3px 0;font-weight:bold}.print{position:fixed;right:12px;top:12px;z-index:5}.photo-sheet{width:190mm;height:277mm;border:1px solid #000;padding:2mm;overflow:hidden;display:flex;flex-direction:column}.photo-header{text-align:center;border:1px solid;display:grid;padding:1mm;font-size:8px}.photo-header strong{font-size:11px}.written-name{display:grid;grid-template-columns:auto 1fr auto 1fr auto 12mm;border:1px solid;border-top:0;min-height:10mm;align-items:center;gap:1mm;padding:1mm;font-size:7px}.written-name span{font-size:10px;font-weight:bold;border-bottom:1px solid;min-height:4mm}.photo-names{border:1px solid;border-top:0;height:151mm;padding:.6mm;overflow:hidden}.photo-groups,.photo-row{display:grid;grid-template-columns:repeat(37,1fr);gap:.35mm}.photo-groups b{border:1px solid;text-align:left;padding:.5mm;font-size:6px}.photo-row{height:5.25mm;align-items:center}.photo-boxes{height:5.5mm}.photo-boxes i{height:4.5mm;border:1px solid;text-align:center;font-style:normal;font-size:7px;padding-top:.5mm}.photo-bubble{width:3.2mm;height:3.2mm;border:.25mm solid;border-radius:50%;font-size:5.3px;display:flex;align-items:center;justify-content:center;margin:auto}.filled{background:#000!important;color:#fff!important;print-color-adjust:exact;-webkit-print-color-adjust:exact}.photo-lower{height:89mm;display:grid;grid-template-columns:29% 34% 37%;border:1px solid;border-top:0}.photo-lower>div{padding:1mm;border-right:1px solid;overflow:hidden}.photo-lower>div:last-child{border:0}.mini-row{display:flex;gap:1mm;align-items:flex-start}.mini-row>*{flex:1}.bubble-block,.photo-panel{border:1px solid;padding:.7mm;margin-bottom:1mm;min-width:0}.bubble-block>b,.panel-title{display:block;text-align:center;font-size:5.5px}.bubble-columns{display:flex;justify-content:center}.bubble-column{display:flex;flex-direction:column;align-items:center;gap:.15mm}.letter{border:1px solid;width:3.4mm;height:3.4mm;text-align:center;font-size:5px}.bubble{display:flex;border:.2mm solid;border-radius:50%;height:2.6mm;width:2.6mm;align-items:center;justify-content:center;font-size:4.5px}.choice-line{display:flex;gap:1mm;align-items:center;font-size:5.5px;margin-top:.5mm}.choice-bubble{width:2.8mm;height:2.8mm;border:.2mm solid;border-radius:50%;flex:none}.photo-sheet footer{font-size:5.5px;text-align:center;margin-top:auto}.clean footer{margin-top:12px;font-size:9px}@media print{.print{display:none}body{width:190mm;height:277mm}}@media screen{body{padding:10mm;background:#ddd}.photo-sheet,.clean{background:#fff;margin:auto}}</style></head><body><button class="print" onclick="window.print()">Print / Save as PDF</button>${mode==='bubble'?sheet:`<main class="clean">${header}${sheet}<footer>KlasePH digital record · Form version 1 · School year ${e(d.school_year)}</footer></main>`}</body></html>`;
   }
   window.bindEllna = () => {
     if(state.view!=='ellna') return;
