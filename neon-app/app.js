@@ -1558,14 +1558,17 @@ function analyticsTable() {
 
 function adminUsersTable() {
   const rows = (state.directoryUsers||state.users).map((u) => {
-    const identityRole = u.role === "student" ? "student" : "teacher";
+    // Keep the established profile role visible. Scoped assignments in Access
+    // Management supplement these roles; they must not make an existing
+    // school or super administrator appear to have been changed to Teacher.
+    const legacyRole = ["student", "teacher", "school_admin", "super_admin"].includes(u.role) ? u.role : "student";
     return `
     <tr>
       <td>${esc(u.name)}</td>
       <td>${esc(u.email)}</td>
       <td>
         <select class="compact-select" data-role-user="${u.id}" ${u.id === user().id ? "disabled" : ""}>
-          ${["student", "teacher"].map((roleName) => `<option value="${roleName}" ${identityRole === roleName ? "selected" : ""}>${esc(t(roleName))}</option>`).join("")}
+          ${roleOptions(legacyRole)}
         </select>
       </td>
       <td>
@@ -1585,7 +1588,7 @@ function adminUsersTable() {
     </tr>
   `;
   }).join("");
-  return `<p class="muted">This table manages account identity and status only. Assign administrative privileges in Access Management.</p><table><thead><tr><th>Name</th><th>Email</th><th>Identity</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
+  return `<p class="muted">Existing profile roles are retained here. Access Management adds scoped permissions without replacing them.</p><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
 }
 
 function schoolsTable() {
