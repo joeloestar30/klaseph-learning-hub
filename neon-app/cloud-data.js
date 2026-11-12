@@ -9,7 +9,17 @@
     if(orderBy[name])query=query.order(orderBy[name],{ascending:false});
     if(pageSize)query=query.range(page*pageSize,(page+1)*pageSize-1);
     const {data,error}=await query;
-    if(error){window.KLASEPH_MONITOR?.capture('database',error,{table:name,operation:'select'});throw error;}
+    if(error){
+      // Feature views are deployed independently from the core application. A
+      // temporarily stale Neon/PostgREST schema cache must not prevent users
+      // from signing in or administrators from reaching Access Management.
+      if(error.code==='PGRST205'||error.code==='42P01'){
+        window.KLASEPH_MONITOR?.capture('database_optional',error,{table:name,operation:'select'});
+        return [];
+      }
+      window.KLASEPH_MONITOR?.capture('database',error,{table:name,operation:'select'});
+      throw error;
+    }
     return data||[];
   }
 
