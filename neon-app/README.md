@@ -19,7 +19,7 @@ Do not rerun the initial schema or import against this now-populated target. `da
 1. Sign in at https://console.neon.tech and create a **Free** project, preferably in the nearest available region to your users. Keep the default scale-to-zero behavior.
 2. Enable **Neon Auth / Managed Better Auth** and **Data API** for the same database/branch. Configure Data API to use Neon Auth. Do not enable the separate legacy Neon RLS product on that branch.
 3. Enable email/password signup and email verification. Verify email delivery settings and the verification-code flow. The app includes a code verification screen and email-link password reset.
-4. In the SQL editor, run `database/schema.sql` **once on the new empty database**, as its owner. The script requires the `authenticated` role, `auth.user_id()` function, and `neon_auth.user` table that Neon provisions. It commits atomically. Do not run it on Supabase or an existing populated database.
+4. In the SQL editor, run `database/schema.sql` **once on the new empty database**, followed by `database/ellna.sql`, `database/secure-assessments.sql`, `database/ellna-workflow.sql`, `database/canonical-assessments.sql`, `database/classroom-operations.sql`, `database/access-control.sql`, and `database/permission-enforcement.sql`, as its owner. The scripts require the `authenticated` role, `auth.user_id()` function, and `neon_auth.user` table that Neon provisions. They commit atomically. Do not run the initial schema on Supabase or an existing populated database. For an existing KlasePH Neon installation, apply only migrations that have not yet been run. See `docs/architecture.md` for module and data-refresh boundaries.
 5. Copy `.env.example` to `.env`; set `NEON_AUTH_URL` and `NEON_DATA_API_URL` to the separate **public HTTPS endpoints** from Neon. These are public frontend configuration, not database passwords. Never put a Postgres connection string or Neon management key here.
 6. Add `http://127.0.0.1:4173` and the final deployed origin to Neon Auth's trusted origins; configure the deployed app URL as an allowed password-reset destination. Confirm CORS access for the Data API.
 
@@ -79,7 +79,7 @@ Refresh the app afterward. Other administrators can be invited from the app by a
 - Test admin invitations, account suspension, school management and password recovery.
 - Verify unrelated accounts cannot read or change another class, and suspended accounts lose access.
 
-The copied app retains its original client-side exam checking and answer-key representation. Treat it as a classroom companion prototype, not a secure high-stakes examination system. Server-side grading and hiding answer keys from student API responses require a separate change.
+Cloud-mode generated exams use `publish_exam` and `submit_exam` database functions. Publication is transactional, student-readable views omit answer keys and correctness flags, and objective grading occurs on the server with database-enforced enrollment, publication, deadline, and attempt checks. Local demo mode still grades in the browser and must never be used for real or high-stakes assessment. Apply `database/secure-assessments.sql` before enabling cloud exam publication.
 
 ## References
 

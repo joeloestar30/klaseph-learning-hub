@@ -10,7 +10,14 @@ if (cfg.NEON_AUTH_URL && cfg.NEON_DATA_API_URL) {
   let pendingEmail = null;
   const result = (user, session, error = null) => ({data:{user,session:session ? {...session,user} : null},error});
   async function safe(action) {
-    try { return await action(); } catch (error) { return {data:{user:null,session:null},error:{message:error.message || 'Unable to connect. Please try again.'}}; }
+    try {
+      const response=await action();
+      if(response?.error)window.KLASEPH_MONITOR?.capture('auth',response.error);
+      return response;
+    } catch (error) {
+      window.KLASEPH_MONITOR?.capture('auth',error);
+      return {data:{user:null,session:null},error:{message:error.message || 'Unable to connect. Please try again.'}};
+    }
   }
   const auth = {
     getSession: () => safe(async () => {

@@ -18,6 +18,8 @@
   box-sizing: border-box;
 }
 
+.skip-link{position:fixed;left:12px;top:-60px;z-index:100;background:#fff;color:#111;padding:10px 14px;border:2px solid #185adb;border-radius:8px}.skip-link:focus{top:12px}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid #f2b705;outline-offset:2px}.data-saver .sync-card{display:none}.data-saver *{scroll-behavior:auto!important}
+
 body {
   margin: 0;
   background: var(--soft);

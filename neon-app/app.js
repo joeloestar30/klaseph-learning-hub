@@ -144,19 +144,19 @@ const text = {
     dashboard: "Dashboard",
     classes: "Klase",
     activities: "Gawain",
-    exams: "Exams",
+    exams: "Pagsusulit",
     records: "Talaan",
-    monitoring: "Student Monitoring",
-    users: "Users",
+    monitoring: "Pagsubaybay sa Mag-aaral",
+    users: "Mga Gumagamit",
     admin: "Admin",
     super_admin: "Super Admin",
     school_admin: "School Admin",
     teacher: "Guro",
     student: "Mag-aaral",
     online: "Online",
-    offline: "Offline draft mode",
-    sync: "Mas mabilis na workflow",
-    syncCopy: "Maraming account, generated assessments, auto-checking, at records export.",
+    offline: "Offline — lokal na draft lamang",
+    sync: "Mas maayos na daloy ng klase",
+    syncCopy: "Mga account, pagsusulit, awtomatikong pagwawasto, at nae-export na talaan.",
     heroTeacher: "Gumawa ng gawain, mag-generate ng exam, at mag-check ng objective answers.",
     heroAdmin: "Pamahalaan ang school system, users, classes, at assessment activity sa isang lugar.",
     heroStudent: "Sumali sa klase, sumagot ng exam, magsumite, at makita agad ang feedback.",
@@ -176,8 +176,8 @@ const text = {
     signOut: "Mag-sign out",
     signIn: "Mag-sign in",
     createAccount: "Gumawa ng account",
-    classRecord: "Class record",
-    learnerProgress: "Progress ng mag-aaral",
+    classRecord: "Talaan ng klase",
+    learnerProgress: "Pag-unlad ng mag-aaral",
     announcements: "Anunsyo",
     upcoming: "Paparating",
     noItems: "Wala pang laman."
@@ -211,6 +211,7 @@ async function init() {
     await loadCloudData(sessionUser.id);
   } catch (error) {
     console.error(error);
+    window.KLASEPH_MONITOR?.capture("startup",error,{operation:"load cloud session"});
     cloudError = error.message || String(error);
     booting = false;
     renderCloudError();
@@ -238,7 +239,6 @@ function renderCloudError() {
           <span>${esc(cloudError || "Unknown Neon error")}</span>
         </div>
         <button class="button" id="retryCloud">Retry cloud connection</button>
-        <button class="ghost" id="useLocalMode">Use local demo mode</button>
       </section>
     </main>
     <div class="toast" id="toast"></div>
@@ -247,10 +247,6 @@ function renderCloudError() {
     cloudError = "";
     cloudMode = cloudConfigured;
     init();
-  });
-  document.querySelector("#useLocalMode")?.addEventListener("click", () => {
-    cloudMode = false;
-    render();
   });
 }
 
@@ -305,56 +301,86 @@ async function loadCloudData(userId) {
   if (profileError) throw profileError;
 
   const current = mapProfile(profile);
-  const classRows = await selectRows("classes", "*");
-  const membershipRows = await selectRows("class_members", "*");
-  const activityRows = await selectRows("activities", "*");
-  const submissionRows = await selectRows("submissions", "*");
-  const announcementRows = await selectRows("announcements", "*");
-  const profileRows = await selectRows("profiles", "*");
-  const schoolRows = await selectOptionalRows("schools", "*");
-  const inviteRows = await selectOptionalRows("admin_invites", "*");
-  const auditRows = await selectOptionalRows("audit_logs", "*");
-  const settingsRows = await selectOptionalRows("system_settings", "*");
-  const interventionRows = await selectOptionalRows("interventions", "*");
+  const ownAccess=await sb.from("access_assignment_directory").select("*").eq("user_id",current.id);
+  if(ownAccess.error)throw ownAccess.error;
+  const activeAccess=(ownAccess.data||[]).filter(item=>!item.revoked_at&&(!item.expires_at||new Date(item.expires_at)>new Date()));
+  const isAdminAccount=activeAccess.some(item=>["school_admin","division_admin","super_admin"].includes(item.role_id));
+  const rows=await window.KLASEPH_CLOUD_DATA.load(sb,{isAdmin:isAdminAccount,
+    directoryPage:state.directoryPage||0,auditPage:state.auditPage||0,dataSaver:Boolean(state.dataSaver||navigator.connection?.saveData)});
+  state={...state,currentUserId:current.id,directoryPage:state.directoryPage||0,auditPage:state.auditPage||0};
+  rows.access_assignment_directory=rows.access_assignment_directory||activeAccess;
+  applyCloudRows(rows,current);
+}
 
-  state = {
-    ...state,
-    users: [
-      current,
-      ...profileRows.map(mapProfile).filter((item) => item.id !== current.id)
-    ],
-    currentUserId: current.id,
-    classes: classRows.map(mapClass),
-    memberships: membershipRows.map(mapMembership),
-    activities: activityRows.map(mapActivity),
-    submissions: submissionRows.map(mapSubmission),
-    announcements: announcementRows.map(mapAnnouncement),
-    schools: schoolRows.map(mapSchool),
-    adminInvites: inviteRows.map(mapAdminInvite),
-    auditLogs: auditRows.map(mapAuditLog),
-    interventions: interventionRows.map(mapIntervention),
-    settings: settingsRows[0] ? mapSettings(settingsRows[0]) : structuredClone(seed.settings)
-  };
+function hydrateAssessmentActivities(activityRows,rows) {
+  const exams=rows.student_exams||state.assessmentExams||[];
+  const questions=rows.student_questions||state.assessmentQuestions||[];
+  const choices=rows.student_question_choices||state.assessmentChoices||[];
+  const examByActivity=new Map(exams.map(exam=>[exam.activity_id,exam]));
+  return activityRows.map(row=>{
+    if(row.mode!=="auto")return row;
+    const exam=examByActivity.get(row.id);
+    if(!exam)return {...row,questions:[]};
+    return {...row,questions:questions.filter(question=>question.exam_id===exam.id).map(question=>({
+      id:question.id,type:question.question_type,prompt:question.prompt,points:Number(question.points),difficulty:question.difficulty,
+      choices:choices.filter(choice=>choice.question_id===question.id).sort((a,b)=>a.choice_label.localeCompare(b.choice_label)).map(choice=>choice.choice_text)
+    }))};
+  });
+}
 
-  if (!state.users.some((item) => item.id === current.id)) {
-    state.users.push(current);
+function applyCloudRows(rows,current=null) {
+  if(rows.student_exams)state.assessmentExams=rows.student_exams;
+  if(rows.student_questions)state.assessmentQuestions=rows.student_questions;
+  if(rows.student_question_choices)state.assessmentChoices=rows.student_question_choices;
+  if(rows.profiles){
+    const mapped=rows.profiles.map(mapProfile);
+    const active=current||state.users.find(item=>item.id===state.currentUserId);
+    const adminAccount=["school_admin","super_admin"].includes(active?.role);
+    if(adminAccount){
+      state.directoryUsers=mapped;
+      const combined=[...(state.users||[]),...mapped];
+      state.users=active?[active,...combined.filter((item,index,items)=>item.id!==active.id&&items.findIndex(other=>other.id===item.id)===index)]:combined;
+    } else state.users=active?[active,...mapped.filter(item=>item.id!==active.id)]:mapped;
   }
+  if(rows.classes)state.classes=rows.classes.map(mapClass);
+  if(rows.class_members)state.memberships=rows.class_members.map(mapMembership);
+  if(rows.activities)state.activities=hydrateAssessmentActivities(rows.activities,rows).map(mapActivity);
+  else if(rows.student_exams||rows.student_questions||rows.student_question_choices)state.activities=hydrateAssessmentActivities(state.activities.map(toActivityLikeRow),rows).map(mapActivity);
+  if(rows.submissions)state.submissions=rows.submissions.map(mapSubmission);
+  if(rows.announcements)state.announcements=rows.announcements.map(mapAnnouncement);
+  if(rows.schools)state.schools=rows.schools.map(mapSchool);
+  if(rows.admin_invites)state.adminInvites=rows.admin_invites.map(mapAdminInvite);
+  if(rows.audit_logs)state.auditLogs=rows.audit_logs.map(mapAuditLog);
+  if(rows.interventions)state.interventions=rows.interventions.map(mapIntervention);
+  if(rows.attendance)state.attendance=rows.attendance;
+  if(rows.teacher_attempt_reviews)state.attemptReviews=rows.teacher_attempt_reviews;
+  if(rows.teacher_attempt_answers)state.attemptAnswers=rows.teacher_attempt_answers;
+  if(rows.teacher_item_analysis)state.itemAnalysis=rows.teacher_item_analysis;
+  if(rows.teacher_competency_performance)state.competencyPerformance=rows.teacher_competency_performance;
+  if(rows.competencies)state.competencies=rows.competencies;
+  if(rows.access_roles)state.accessRoles=rows.access_roles;
+  if(rows.access_assignment_directory)state.accessAssignments=rows.access_assignment_directory;
+  if(rows.access_request_queue)state.accessRequests=rows.access_request_queue;
+  if(rows.access_monitoring)state.accessMonitoring=rows.access_monitoring;
+  if(rows.system_settings)state.settings=rows.system_settings[0]?mapSettings(rows.system_settings[0]):structuredClone(seed.settings);
 }
 
-async function selectRows(table, columns) {
-  const { data, error } = await sb.from(table).select(columns);
-  if (error) throw error;
-  return data || [];
+function toActivityLikeRow(activity){return {id:activity.id,class_id:activity.classId,teacher_id:activity.teacherId,title:activity.title,
+  type:activity.type,mode:activity.mode,due_date:activity.due,status:activity.status,instructions:activity.instructions,
+  standard:activity.standard,questions:activity.questions,archived_at:activity.archivedAt};}
+
+async function refreshCloudTables(names){
+  if(!cloudMode)return;
+  const rows=await window.KLASEPH_CLOUD_DATA.fetchTables(sb,names,{isAdmin:isAdmin(),directoryPage:state.directoryPage||0,auditPage:state.auditPage||0,dataSaver:Boolean(state.dataSaver||navigator.connection?.saveData)});
+  applyCloudRows(rows);
 }
 
-async function selectOptionalRows(table, columns) {
-  const { data, error } = await sb.from(table).select(columns);
-  if (error) {
-    console.warn(`Optional table ${table} unavailable:`, error.message);
-    return [];
-  }
-  return data || [];
+function reportCloudError(error,operation="database mutation"){
+  window.KLASEPH_MONITOR?.capture("database",error,{operation});
+  return toast(error.message||String(error));
 }
+
+function callRpc(name,args){return window.KLASEPH_MONITOR.rpc(sb,name,args);}
 
 function mapProfile(row) {
   return {
@@ -506,33 +532,25 @@ function toActivityRow(activity) {
   };
 }
 
-function toSubmissionRow(submission) {
-  return {
-    id: submission.id,
-    activity_id: submission.activityId,
-    student_id: submission.studentId,
-    answers: submission.answers || {},
-    score: submission.score,
-    max_score: submission.maxScore,
-    feedback: submission.feedback,
-    checked_at: submission.checkedAt
-  };
-}
-
 function user() {
   return state.users.find((item) => item.id === state.currentUserId);
 }
 
 function role() {
+  if(cloudMode){
+    const assignments=(state.accessAssignments||[]).filter(item=>item.user_id===state.currentUserId&&!item.revoked_at&&(!item.expires_at||new Date(item.expires_at)>new Date()));
+    for(const candidate of ["super_admin","division_admin","school_admin","teacher"]){if(assignments.some(item=>item.role_id===candidate))return candidate;}
+  }
   return String(user()?.role || "student").trim();
 }
 
 function isAdmin() {
-  return role() === "super_admin" || role() === "school_admin";
+  return ["super_admin","division_admin","school_admin"].includes(role());
 }
 
 function canTeach() {
-  return role() === "teacher" || isAdmin();
+  if(isAdmin()||role()==="teacher")return true;
+  return cloudMode&&(state.accessAssignments||[]).some(item=>item.user_id===state.currentUserId&&["assessment_coordinator","grade_coordinator"].includes(item.role_id)&&!item.revoked_at);
 }
 
 function t(key) {
@@ -563,6 +581,8 @@ function activeClasses() {
 }
 
 function render() {
+  document.documentElement.lang=state.lang==="fil"?"fil":"en";
+  document.body.classList.toggle("data-saver",Boolean(state.dataSaver||navigator.connection?.saveData));
   if (!user()) {
     app.innerHTML = authScreen();
     bindAuth();
@@ -597,7 +617,7 @@ function render() {
           <span class="small">${t("syncCopy")}</span>
         </div>
       </aside>
-      <main class="main">
+      <main class="main" id="mainContent" tabindex="-1">
         <section class="topbar">
           <div>
             <h1>${t("title")}</h1>
@@ -605,6 +625,7 @@ function render() {
           </div>
           <div class="top-actions">
             <span class="status ${isOnline ? "" : "offline"}">${isOnline ? t("online") : t("offline")}</span>
+            <button class="ghost" id="dataSaver" aria-pressed="${Boolean(state.dataSaver)}">${state.dataSaver?'Standard data':'Low data'}</button>
             ${!cloudMode && role() !== "super_admin" ? `<button class="ghost" id="switchAdminDemo">Admin demo</button>` : ""}
             <button class="ghost" id="signOut">${t("signOut")}</button>
             ${cloudMode ? "" : `<button class="ghost" id="reset">${t("reset")}</button>`}
@@ -613,7 +634,7 @@ function render() {
         ${route()}
       </main>
     </div>
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
   `;
   bind();
   window.bindEllna?.();
@@ -775,6 +796,7 @@ function classesView() {
         <div class="panel-title"><h3>${t("classes")}</h3></div>
         <div class="list">${myClasses().map(classItem).join("") || empty()}</div>
       </div>
+      ${window.KLASEPH_CLASSROOM?.rosterPanel()||''}
     </section>
   `;
 }
@@ -840,6 +862,7 @@ function recordsView() {
         <div class="panel-title"><h3>${t("classRecord")}</h3><button class="ghost" id="exportCsv">CSV</button></div>
         <div class="table-wrap">${recordTable(submissions)}</div>
       </div>
+      ${window.KLASEPH_CLASSROOM?.reviewPanel()||''}
     </section>
   `;
 }
@@ -874,6 +897,8 @@ function monitoringView() {
         <div class="panel-title"><h3>Recent Interventions</h3></div>
         <div class="list">${teacherInterventions().slice(0, 6).map(interventionItem).join("") || empty()}</div>
       </div>
+      ${window.KLASEPH_CLASSROOM?.analyticsPanel()||''}
+      ${window.KLASEPH_CLASSROOM?.attendancePanel()||''}
     </section>
   `;
 }
@@ -911,6 +936,7 @@ function adminUsersView() {
       </div>
       <div class="tabs" role="tablist" aria-label="Admin sections">
         ${adminTabButton("directory", "Directory")}
+        ${adminTabButton("access", "Access Management")}
         ${adminTabButton("classes", "Classes")}
         ${adminTabButton("enrollment", "Enrollment")}
         ${adminTabButton("content", "Activities & Exams")}
@@ -919,7 +945,7 @@ function adminUsersView() {
         ${adminTabButton("announcements", "Announcements")}
         ${adminTabButton("settings", "Settings")}
         ${adminTabButton("analytics", "Analytics")}
-        ${adminTabButton("invites", "Admin Invites")}
+        ${adminTabButton("invites", "Legacy Invites")}
         ${adminTabButton("audit", "Audit Logs")}
         ${adminTabButton("health", "System Health")}
       </div>
@@ -933,6 +959,7 @@ function adminTabButton(tab, label) {
 }
 
 function adminTabContent(tab) {
+  if (tab === "access") return window.KLASEPH_ACCESS?.render()||empty();
   if (tab === "classes") return adminClassesTab();
   if (tab === "enrollment") return adminEnrollmentTab();
   if (tab === "content") return adminContentTab();
@@ -952,7 +979,7 @@ function adminDirectoryTab() {
     <section class="grid">
       <div class="composer span-4">
         <div class="panel-title"><h3>Create Local Account</h3></div>
-        ${cloudMode ? `<div class="standard-box"><b>Cloud auth protected</b><span>Create teacher and student accounts from the sign-up screen, then manage their roles here. Admin invites are available in the Admin Invites tab.</span></div>` : `<form id="adminCreateUserForm" class="form-grid">
+        ${cloudMode ? `<div class="standard-box"><b>Cloud auth protected</b><span>Create teacher and student accounts from the sign-up screen. Manage identity and status here, and grant scoped administrator roles through Access Management.</span></div>` : `<form id="adminCreateUserForm" class="form-grid">
           <label class="full">Name<input name="name" required></label>
           <label>Role<select name="role">${roleOptions()}</select></label>
           <label>School<input name="school" value="${esc(user().school || "")}"></label>
@@ -962,8 +989,9 @@ function adminDirectoryTab() {
         </form>`}
       </div>
       <div class="panel span-12">
-        <div class="panel-title"><h3>User Directory</h3><span class="muted">${state.users.length} visible accounts</span></div>
+        <div class="panel-title"><h3>User Directory</h3><span class="muted">Page ${(state.directoryPage||0)+1} · ${(state.directoryUsers||state.users).length} visible accounts</span></div>
         <div class="table-wrap">${adminUsersTable()}</div>
+        <div class="row-actions"><button class="ghost" data-admin-page="directory" data-page-delta="-1" ${!state.directoryPage?'disabled':''}>Previous</button><button class="ghost" data-admin-page="directory" data-page-delta="1" ${(state.directoryUsers||state.users).length<(state.dataSaver?25:50)?'disabled':''}>Next</button></div>
       </div>
     </section>
   `;
@@ -1026,6 +1054,7 @@ function adminContentTab() {
         <div class="panel-title"><h3>Activities and Exams</h3><span class="muted">${state.activities.length} items</span></div>
         <div class="table-wrap">${adminContentTable()}</div>
       </div>
+      ${role()==='super_admin'?`<div class="composer span-12"><div class="panel-title"><h3>Official competency catalog import</h3><span class="muted">Reviewed DepEd sources only</span></div><form id="competencyImportForm" class="form-grid"><label>DepEd source URL<input name="source_url" type="url" pattern="https://([a-z0-9-]+\\.)*deped\\.gov\\.ph/.*" required></label><label>Source version<input name="source_version" required placeholder="MATATAG Phase 1"></label><label class="full">Entries JSON<textarea name="entries" required placeholder='[{"grade_level":"Grade 4","subject":"Science","quarter":"Quarter 1","competency_code":"...","competency_text":"..."}]'></textarea></label><button class="button full">Import reviewed competencies</button></form></div>`:''}
     </section>
   `;
 }
@@ -1134,16 +1163,12 @@ function adminInvitesTab() {
   return `
     <section class="grid">
       <div class="composer span-4">
-        <div class="panel-title"><h3>Invite Admin</h3></div>
-        <form id="adminInviteForm" class="form-grid">
-          <label class="full">Email<input name="email" type="email" required placeholder="admin@school.edu.ph"></label>
-          <label>Role<select name="role"><option value="school_admin">School Admin</option><option value="super_admin">Super Admin</option></select></label>
-          <label>School<select name="school_id"><option value="">No school</option>${schoolOptions()}</select></label>
-          <button class="button full">Create invite</button>
-        </form>
+        <div class="panel-title"><h3>Administrator onboarding</h3></div>
+        <p>Direct administrator invitations are retired. Create the person as a standard teacher or student, then grant the minimum required role and scope through an approved access request.</p>
+        <button class="button" data-admin-tab="access">Open Access Management</button>
       </div>
       <div class="panel span-8">
-        <div class="panel-title"><h3>Admin Invites</h3><span class="muted">${state.adminInvites.filter((item) => !item.acceptedAt).length} pending</span></div>
+        <div class="panel-title"><h3>Legacy Admin Invites</h3><span class="muted">Read-only history</span></div>
         <div class="table-wrap">${adminInvitesTable()}</div>
       </div>
     </section>
@@ -1154,8 +1179,9 @@ function adminAuditTab() {
   return `
     <section class="grid">
       <div class="panel span-12">
-        <div class="panel-title"><h3>Audit Logs</h3><span class="muted">Recent admin and system actions</span></div>
+        <div class="panel-title"><h3>Audit Logs</h3><span class="muted">Page ${(state.auditPage||0)+1} · operational and admin actions</span></div>
         <div class="table-wrap">${auditLogsTable()}</div>
+        <div class="row-actions"><button class="ghost" data-admin-page="audit" data-page-delta="-1" ${!state.auditPage?'disabled':''}>Previous</button><button class="ghost" data-admin-page="audit" data-page-delta="1" ${state.auditLogs.length<(state.dataSaver?15:25)?'disabled':''}>Next</button></div>
       </div>
     </section>
   `;
@@ -1165,12 +1191,14 @@ function adminHealthTab() {
   const suspended = state.users.filter((item) => item.status === "suspended").length;
   const archived = state.users.filter((item) => item.status === "archived").length;
   const admins = state.users.filter((item) => item.role === "super_admin" || item.role === "school_admin").length;
+  const operationalErrors=window.KLASEPH_MONITOR?.recent().length||0;
   return `
     <section class="grid">
       ${metric("Users", state.users.length, `${admins} admin account/s`)}
       ${metric("Schools", state.schools.length, "School records available")}
       ${metric("Pending invites", state.adminInvites.filter((item) => !item.acceptedAt).length, "Admin invitations awaiting signup")}
       ${metric("Suspended", suspended, `${archived} archived account/s`)}
+      ${metric("Client errors", operationalErrors, "Recent local operational events")}
       <div class="panel span-12">
         <div class="panel-title"><h3>Setup Status</h3></div>
         <div class="list">
@@ -1211,7 +1239,9 @@ function examGeneratorForm() {
       <label>Quarter<select name="quarter"><option>Quarter 1</option><option>Quarter 2</option><option>Quarter 3</option><option>Quarter 4</option></select></label>
       <label>Subject<select name="subject"><option>Science</option><option>Mathematics</option><option>Filipino</option><option>English</option><option>Araling Panlipunan</option></select></label>
       <label>Topic<input name="topic" required placeholder="Matter and its properties"></label>
-      <label class="full">DepEd learning competency<input name="competency" required placeholder="Paste the exact competency from the MATATAG/K to 12 Curriculum Guide."></label>
+      <label class="full">DepEd learning competency<input name="competency" list="competencyCatalog" required placeholder="Paste the exact competency from the MATATAG/K to 12 Curriculum Guide."><datalist id="competencyCatalog">${(state.competencies||[]).map(item=>`<option value="${esc(item.competency_text)}">${esc(item.source_version||item.source||'Teacher provided')}</option>`).join('')}</datalist></label>
+      <label>Competency source URL<input name="competencySourceUrl" type="url" placeholder="https://www.deped.gov.ph/..."></label>
+      <label>Source version<input name="competencySourceVersion" placeholder="e.g. MATATAG Phase 1"></label>
       <label class="full">Lesson notes or source text<textarea name="sourceText" required placeholder="Paste the lesson summary, key terms, or reviewer here. The generated questions and answer key will use this content."></textarea></label>
       <label>Assessment component<select name="component"><option>Written Work</option><option>Quarterly Assessment</option><option>Formative Check</option></select></label>
       <label>Items<input type="number" name="items" min="3" max="20" value="10"></label>
@@ -1322,7 +1352,7 @@ function activityItem(item) {
       <div class="muted">${esc(className)} · ${esc(item.type)} · Due ${esc(item.due)}</div>
       <div class="muted">${esc(standard)}</div>
       ${upload ? `<div class="muted">${esc(upload.fileName)} · ${esc(formatBytes(upload.fileSize))}</div>` : ""}
-      <div class="chips"><span class="chip">${esc(item.status || "Open")}</span><span class="chip">${totalPoints(item)} pts</span><span class="chip green">${submissions.length} submissions</span><span class="chip gold">${item.questions?.length || 1} item/s</span>${upload ? examFileLink(item, "File") : ""}</div>
+      <div class="chips"><span class="chip">${esc(item.status || "Open")}</span><span class="chip">${totalPoints(item)} pts</span><span class="chip green">${submissions.length} submissions</span><span class="chip gold">${item.questions?.length || item.standard?.itemCount || 1} item/s</span>${upload ? examFileLink(item, "File") : ""}</div>
     </article>
   `;
 }
@@ -1527,13 +1557,15 @@ function analyticsTable() {
 }
 
 function adminUsersTable() {
-  const rows = state.users.map((u) => `
+  const rows = (state.directoryUsers||state.users).map((u) => {
+    const identityRole = u.role === "student" ? "student" : "teacher";
+    return `
     <tr>
       <td>${esc(u.name)}</td>
       <td>${esc(u.email)}</td>
       <td>
         <select class="compact-select" data-role-user="${u.id}" ${u.id === user().id ? "disabled" : ""}>
-          ${["student", "teacher", "school_admin", "super_admin"].map((roleName) => `<option value="${roleName}" ${u.role === roleName ? "selected" : ""}>${esc(t(roleName))}</option>`).join("")}
+          ${["student", "teacher"].map((roleName) => `<option value="${roleName}" ${identityRole === roleName ? "selected" : ""}>${esc(t(roleName))}</option>`).join("")}
         </select>
       </td>
       <td>
@@ -1551,8 +1583,9 @@ function adminUsersTable() {
         </div>
       </td>
     </tr>
-  `).join("");
-  return `<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
+  `;
+  }).join("");
+  return `<p class="muted">This table manages account identity and status only. Assign administrative privileges in Access Management.</p><table><thead><tr><th>Name</th><th>Email</th><th>Identity</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
 }
 
 function schoolsTable() {
@@ -1569,7 +1602,7 @@ function adminInvitesTable() {
 }
 
 function auditLogsTable() {
-  const rows = state.auditLogs.slice(0, 20).map((log) => {
+  const rows = state.auditLogs.map((log) => {
     const actor = state.users.find((item) => item.id === log.actorId)?.email || "system";
     return `<tr><td>${esc(log.action)}</td><td>${esc(log.table || "")}</td><td>${esc(actor)}</td><td>${esc(log.createdAt || "")}</td></tr>`;
   }).join("");
@@ -1615,7 +1648,7 @@ function bindAuth() {
         email: data.email,
         password: data.password
       });
-      if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
       await loadCloudData(authData.user.id);
       state.view = "dashboard";
       render();
@@ -1644,7 +1677,7 @@ function bindAuth() {
           }
         }
       });
-      if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
       if (!authData.user || !authData.session) return toast("Check your email to confirm the account, then sign in.");
       await ensureCloudProfile(authData.user.id, data);
       await loadCloudData(authData.user.id);
@@ -1746,9 +1779,12 @@ function bind() {
   document.querySelector("#announcementForm")?.addEventListener("submit", saveAnnouncement);
   document.querySelector("#settingsForm")?.addEventListener("submit", saveSettings);
   document.querySelector("#interventionForm")?.addEventListener("submit", saveIntervention);
+  document.querySelector("#competencyImportForm")?.addEventListener("submit",saveCompetencyCatalog);
   document.querySelector("#schoolForm")?.addEventListener("submit", saveSchool);
   document.querySelector("#adminInviteForm")?.addEventListener("submit", saveAdminInvite);
   document.querySelector("#refreshCloud")?.addEventListener("click", refreshCloudData);
+  document.querySelector("#dataSaver")?.addEventListener("click",()=>{state.dataSaver=!state.dataSaver;persist();render();});
+  document.querySelectorAll("[data-admin-page]").forEach(button=>button.addEventListener("click",()=>changeAdminPage(button.dataset.adminPage,Number(button.dataset.pageDelta))));
   document.querySelectorAll("[data-save-user]").forEach((button) => {
     button.addEventListener("click", () => saveAdminUser(button.dataset.saveUser));
   });
@@ -1778,6 +1814,23 @@ function bind() {
     const activity = state.activities.find((item) => item.id === event.target.value);
     document.querySelector("#answerFields").innerHTML = answerFields(activity);
   });
+  window.KLASEPH_CLASSROOM?.bind();
+  window.KLASEPH_ACCESS?.bind();
+}
+
+async function changeAdminPage(kind,delta){
+  const key=kind==="audit"?"auditPage":"directoryPage";
+  state[key]=Math.max(0,(state[key]||0)+delta);
+  try{await refreshCloudTables([kind==="audit"?"audit_logs":"profiles"]);render();}
+  catch(error){state[key]=Math.max(0,state[key]-delta);reportCloudError(error,`${kind} pagination`);}
+}
+
+async function saveCompetencyCatalog(event){
+  event.preventDefault();const data=Object.fromEntries(new FormData(event.target));let entries;
+  try{entries=JSON.parse(data.entries);if(!Array.isArray(entries))throw new Error('Entries must be an array.');}
+  catch(error){return toast(`Invalid JSON: ${error.message}`);}
+  const result=await callRpc('import_official_competencies',{entries_input:entries,source_url_input:data.source_url,source_version_input:data.source_version});
+  if(result.error)return reportCloudError(result.error,'competency import');await refreshCloudTables(['competencies']);render();toast(`${result.data} competencies imported.`);
 }
 
 async function saveClass(event) {
@@ -1785,9 +1838,9 @@ async function saveClass(event) {
   const data = Object.fromEntries(new FormData(event.target));
   if (!canTeach()) {
     if (cloudMode) {
-      const { error } = await sb.rpc("join_class_by_code", { code_input: data.code });
-      if (error) return toast(error.message);
-      await loadCloudData(user().id);
+      const { error } = await callRpc("join_class_by_code", { code_input: data.code });
+    if (error) return reportCloudError(error);
+      await refreshCloudTables(["classes","class_members","activities","submissions","profiles","student_exams","student_questions","student_question_choices"]);
       state.view = "classes";
       render();
       return toast("Class joined.");
@@ -1810,8 +1863,8 @@ async function saveClass(event) {
       join_code: uniqueCode(data.code || data.name),
       teacher_id: user().id
     });
-    if (error) return toast(error.message);
-    await loadCloudData(user().id);
+    if (error) return reportCloudError(error);
+    await refreshCloudTables(["classes"]);
   } else {
     state.classes.unshift({
       id: crypto.randomUUID(),
@@ -1845,9 +1898,8 @@ async function saveActivity(event) {
   };
   if (cloudMode) {
     const { error } = await sb.from("activities").insert(toActivityRow(activity));
-    if (error) return toast(error.message);
-    await saveNormalizedExam(activity);
-    await loadCloudData(user().id);
+    if (error) return reportCloudError(error);
+    await refreshCloudTables(["activities"]);
   } else {
     state.activities.unshift(activity);
   }
@@ -1866,6 +1918,8 @@ async function saveGeneratedExam(event) {
     subject: data.subject,
     topic: data.topic,
     competency: data.competency,
+    competencySourceUrl: data.competencySourceUrl || "",
+    competencySourceVersion: data.competencySourceVersion || "Teacher provided",
     component: data.component,
     difficulty: data.difficulty,
     mix: data.mix
@@ -1890,9 +1944,9 @@ async function saveGeneratedExam(event) {
     questions
   };
   if (cloudMode) {
-    const { error } = await sb.from("activities").insert(toActivityRow(activity));
-    if (error) return toast(error.message);
-    await loadCloudData(user().id);
+    const { error } = await publishSecureExam(activity);
+    if (error) return reportCloudError(error);
+    await refreshCloudTables(["activities"]);
   } else {
     state.activities.unshift(activity);
   }
@@ -1946,8 +2000,8 @@ async function saveUploadedExam(event) {
 
   if (cloudMode) {
     const { error } = await sb.from("activities").insert(toActivityRow(activity));
-    if (error) return toast(error.message);
-    await loadCloudData(user().id);
+    if (error) return reportCloudError(error);
+    await refreshCloudTables(["activities"]);
   } else {
     state.activities.unshift(activity);
   }
@@ -1967,8 +2021,20 @@ async function saveSubmission(event) {
   activity.questions.forEach((q) => {
     answers[q.id] = form.get(q.id) || form.get("response") || "";
   });
-  const checked = activity.mode === "auto" && state.settings.autoCheckEnabled ? checkAnswers(activity, answers) : { score: null, maxScore: totalPoints(activity), feedback: "" };
   const existing = state.submissions.find((s) => s.activityId === activity.id && s.studentId === user().id);
+  if (cloudMode) {
+    const result = activity.mode === "auto"
+      ? await callRpc("submit_exam", { activity_id_input: activity.id, answers_input: answers })
+      : await callRpc("submit_activity", { activity_id_input: activity.id, answers_input: answers });
+    if (result.error) return toast(result.error.message);
+    await refreshCloudTables(["submissions"]);
+    persist();
+    render();
+    return toast(activity.mode === "auto" && result.data?.status === "graded"
+      ? `Securely checked: ${result.data.score}/${result.data.max_score}`
+      : "Submission saved for teacher review.");
+  }
+  const checked = activity.mode === "auto" && state.settings.autoCheckEnabled ? checkAnswers(activity, answers) : { score: null, maxScore: totalPoints(activity), feedback: "" };
   const submission = {
     id: existing?.id || crypto.randomUUID(),
     activityId: activity.id,
@@ -1979,13 +2045,7 @@ async function saveSubmission(event) {
     feedback: checked.feedback,
     checkedAt: activity.mode === "auto" && state.settings.autoCheckEnabled ? new Date().toISOString().slice(0, 10) : null
   };
-  if (cloudMode) {
-    const { error } = await sb.from("submissions").upsert(toSubmissionRow(submission), {
-      onConflict: "activity_id,student_id"
-    });
-    if (error) return toast(error.message);
-    await loadCloudData(user().id);
-  } else if (existing) Object.assign(existing, submission);
+  if (existing) Object.assign(existing, submission);
   else state.submissions.unshift(submission);
   persist();
   render();
@@ -2033,9 +2093,9 @@ async function saveAdminClass(event) {
       section: classRecord.section,
       school_year: classRecord.schoolYear
     });
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("create_class", "classes", null, classRecord);
-    await loadCloudData(user().id);
+    await refreshCloudTables(["classes","audit_logs"]);
   } else {
     state.classes.unshift(classRecord);
     addLocalAudit("create_class", "classes", classRecord.id, classRecord);
@@ -2062,9 +2122,9 @@ async function saveAdminClassEdit(classId) {
       schedule: patch.schedule,
       updated_at: new Date().toISOString()
     }).eq("id", classId);
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("update_class", "classes", classId, patch);
-    await loadCloudData(user().id);
+    await refreshCloudTables(["classes","audit_logs"]);
   } else {
     Object.assign(item, patch);
     addLocalAudit("update_class", "classes", classId, patch);
@@ -2080,9 +2140,9 @@ async function archiveAdminClass(classId) {
   const archivedAt = new Date().toISOString();
   if (cloudMode) {
     const { error } = await sb.from("classes").update({ archived_at: archivedAt, updated_at: archivedAt }).eq("id", classId);
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("archive_class", "classes", classId, { archived_at: archivedAt });
-    await loadCloudData(user().id);
+    await refreshCloudTables(["classes","audit_logs"]);
   } else {
     const item = state.classes.find((c) => c.id === classId);
     if (item) item.archivedAt = archivedAt;
@@ -2104,9 +2164,9 @@ async function saveEnrollment(event) {
       user_id: data.studentId,
       attendance: data.attendance
     }, { onConflict: "class_id,user_id" });
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("enroll_student", "class_members", null, data);
-    await loadCloudData(user().id);
+    await refreshCloudTables(["class_members","profiles","audit_logs"]);
   } else if (existing) {
     existing.attendance = data.attendance;
     addLocalAudit("update_enrollment", "class_members", null, data);
@@ -2124,9 +2184,9 @@ async function saveAttendance(key) {
   const attendance = document.querySelector(`[data-attendance="${key}"]`)?.value || "present";
   if (cloudMode) {
     const { error } = await sb.from("class_members").update({ attendance }).eq("class_id", classId).eq("user_id", userId);
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("update_attendance", "class_members", null, { classId, userId, attendance });
-    await loadCloudData(user().id);
+    await refreshCloudTables(["class_members","audit_logs"]);
   } else {
     const item = state.memberships.find((m) => m.classId === classId && m.userId === userId);
     if (item) item.attendance = attendance;
@@ -2142,9 +2202,9 @@ async function removeEnrollment(key) {
   if (!confirm("Remove this student from the class?")) return;
   if (cloudMode) {
     const { error } = await sb.from("class_members").delete().eq("class_id", classId).eq("user_id", userId);
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("remove_enrollment", "class_members", null, { classId, userId });
-    await loadCloudData(user().id);
+    await refreshCloudTables(["class_members","audit_logs"]);
   } else {
     state.memberships = state.memberships.filter((m) => !(m.classId === classId && m.userId === userId));
     addLocalAudit("remove_enrollment", "class_members", null, { classId, userId });
@@ -2159,9 +2219,9 @@ async function saveActivityStatus(activityId) {
   const archivedAt = status === "Archived" ? new Date().toISOString() : null;
   if (cloudMode) {
     const { error } = await sb.from("activities").update({ status: status === "Archived" ? "Closed" : status, archived_at: archivedAt, updated_at: new Date().toISOString() }).eq("id", activityId);
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("update_activity_status", "activities", activityId, { status, archivedAt });
-    await loadCloudData(user().id);
+    await refreshCloudTables(["activities","audit_logs"]);
   } else {
     const activity = state.activities.find((item) => item.id === activityId);
     if (activity) {
@@ -2199,9 +2259,9 @@ async function saveAnnouncement(event) {
       message: item.message,
       date: item.date
     })));
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("post_announcement", "announcements", null, { count: records.length, message: data.message });
-    await loadCloudData(user().id);
+    await refreshCloudTables(["announcements","audit_logs"]);
   } else {
     state.announcements.unshift(...records);
     addLocalAudit("post_announcement", "announcements", null, { count: records.length, message: data.message });
@@ -2233,9 +2293,9 @@ async function saveSettings(event) {
       updated_by: user().id,
       updated_at: new Date().toISOString()
     });
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("update_settings", "system_settings", null, settings);
-    await loadCloudData(user().id);
+    await refreshCloudTables(["system_settings","audit_logs"]);
   } else {
     state.settings = settings;
     addLocalAudit("update_settings", "system_settings", null, settings);
@@ -2275,9 +2335,9 @@ async function saveIntervention(event) {
       status: intervention.status,
       notes: intervention.notes || null
     });
-    if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
     await logAdminAction("create_intervention", "interventions", intervention.id, intervention);
-    await loadCloudData(user().id);
+    await refreshCloudTables(["interventions","audit_logs"]);
   } else {
     state.interventions.unshift(intervention);
     addLocalAudit("create_intervention", "interventions", intervention.id, intervention);
@@ -2321,9 +2381,9 @@ async function saveSchool(event) {
     district: data.district || null,
     created_by: user().id
   });
-  if (error) return toast(error.message);
+    if (error) return reportCloudError(error);
   await logAdminAction("create_school", "schools", null, { name: data.name });
-  await refreshCloudData();
+  await refreshCloudTables(["schools","audit_logs"]);render();toast("School created.");
 }
 
 async function saveAdminInvite(event) {
@@ -2347,14 +2407,14 @@ async function saveAdminInvite(event) {
     render();
     return toast("Admin invite saved.");
   }
-  const { error } = await sb.rpc("admin_create_invite", {
+  const { error } = await callRpc("admin_create_invite", {
     invite_email: data.email,
     invite_role: data.role,
     invite_school_id: data.school_id || null,
     invite_school_name: school?.name || null
   });
-  if (error) return toast(error.message);
-  await refreshCloudData();
+    if (error) return reportCloudError(error);
+  await refreshCloudTables(["admin_invites","audit_logs"]);render();
   toast("Admin invite saved.");
 }
 
@@ -2379,26 +2439,26 @@ async function saveAdminUser(targetUserId, forcedStatus = null) {
     render();
     return toast("User updated.");
   }
-  const { error } = await sb.rpc("admin_update_profile", {
+  const { error } = await callRpc("admin_update_profile", {
     target_user_id: targetUserId,
     new_role: nextRole,
     new_status: nextStatus,
     new_school_id: nextSchool
   });
-  if (error) return toast(error.message);
-  await refreshCloudData();
+    if (error) return reportCloudError(error);
+  await refreshCloudTables(["profiles","audit_logs"]);render();
   toast("User updated.");
 }
 
 async function logAdminAction(action, tableName, recordId, afterData) {
   if (!cloudMode) return;
-  await sb.rpc("log_audit", {
+  await callRpc("log_audit", {
     action_input: action,
     table_name_input: tableName,
     record_id_input: recordId,
     before_input: null,
     after_input: afterData
-  }).catch(() => {});
+  });
 }
 
 function addLocalAudit(action, tableName, recordId, afterData) {
@@ -2414,92 +2474,22 @@ function addLocalAudit(action, tableName, recordId, afterData) {
   });
 }
 
-async function saveNormalizedExam(activity) {
+async function publishSecureExam(activity) {
   const standard = activity.standard || {};
-  try {
-    const competencyId = await ensureCompetency(standard, activity.classId);
-    const { data: exam, error: examError } = await sb
-      .from("exams")
-      .insert({
-        class_id: activity.classId,
-        teacher_id: activity.teacherId,
-        competency_id: competencyId,
-        title: activity.title,
-        assessment_component: standard.component || "Written Work",
-        grade_level: standard.grade,
-        subject: standard.subject,
-        quarter: standard.quarter,
-        topic: standard.topic,
-        instructions: activity.instructions,
-        due_date: activity.due,
-        status: "published"
-      })
-      .select("id")
-      .single();
-
-    if (examError) throw examError;
-
-    for (const [index, question] of activity.questions.entries()) {
-      const { data: savedQuestion, error: questionError } = await sb
-        .from("questions")
-        .insert({
-          id: question.id,
-          exam_id: exam.id,
-          competency_id: competencyId,
-          item_no: index + 1,
-          question_type: question.type,
-          difficulty: question.difficulty || "Average",
-          prompt: question.prompt,
-          answer_key: question.answer || "",
-          points: question.points || 1,
-          auto_check: question.type !== "essay",
-          explanation: question.component || ""
-        })
-        .select("id")
-        .single();
-
-      if (questionError) throw questionError;
-
-      if (Array.isArray(question.choices) && question.choices.length) {
-        const choices = question.choices.map((choice, choiceIndex) => ({
-          question_id: savedQuestion.id,
-          choice_label: String.fromCharCode(65 + choiceIndex),
-          choice_text: choice,
-          is_correct: normalize(choice) === normalize(question.answer)
-        }));
-        const { error: choicesError } = await sb.from("question_choices").insert(choices);
-        if (choicesError) throw choicesError;
-      }
+  return callRpc("publish_exam", {
+    payload: {
+      activity_id: activity.id,
+      class_id: activity.classId,
+      title: activity.title,
+      assessment_component: standard.component || "Written Work",
+      due_date: activity.due,
+      time_limit_minutes: standard.timeLimit || null,
+      max_attempts: 1,
+      instructions: activity.instructions,
+      standard:{...standard,itemCount:activity.questions.length,maxPoints:activity.questions.reduce((sum,item)=>sum+Number(item.points||0),0)},
+      questions: activity.questions
     }
-  } catch (error) {
-    console.warn("Normalized exam save skipped:", error);
-  }
-}
-
-async function ensureCompetency(standard, classId) {
-  if (!standard?.competency) return null;
-  const schoolId = state.classes.find((item) => item.id === classId)?.schoolId || null;
-  const record = {
-    school_id: schoolId,
-    grade_level: standard.grade || "Unspecified",
-    subject: standard.subject || "Unspecified",
-    quarter: standard.quarter || "Unspecified",
-    learning_area: standard.subject || "Unspecified",
-    competency_code: null,
-    competency_text: standard.competency,
-    source: "Teacher provided",
-    created_by: user().id
-  };
-  const { data, error } = await sb
-    .from("competencies")
-    .insert(record)
-    .select("id")
-    .single();
-  if (error) {
-    console.warn("Competency save skipped:", error);
-    return null;
-  }
-  return data.id;
+  });
 }
 
 function generateQuestions(input) {
@@ -2755,7 +2745,7 @@ function formatBytes(bytes) {
 
 function totalPoints(activity) {
   if (!activity) return 0;
-  return activity.questions?.reduce((sum, q) => sum + Number(q.points || 0), 0) || 0;
+  return activity.questions?.reduce((sum, q) => sum + Number(q.points || 0), 0) || Number(activity.standard?.maxPoints || 0);
 }
 
 function normalize(value) {

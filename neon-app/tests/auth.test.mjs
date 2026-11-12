@@ -2,9 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {runInNewContext} from 'node:vm';
+import {fileURLToPath} from 'node:url';
+import {readFile} from 'node:fs/promises';
 
 test('auth adapter handles sessions, verification, password reset and network errors', async () => {
-  const compiled = await build({entryPoints:['src/client.js'],bundle:true,write:false,format:'iife',plugins:[{
+  const compiled = await build({stdin:{contents:await readFile(new URL('../src/client.js', import.meta.url),'utf8'),resolveDir:fileURLToPath(new URL('..',import.meta.url)),sourcefile:'client.js'},bundle:true,write:false,format:'iife',plugins:[{
     name:'mock-neon',setup(b) {
       b.onResolve({filter:/^@neondatabase\/neon-js$/},()=>({path:'mock',namespace:'test'}));
       b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:'export const createClient = () => window.mockClient;'}));

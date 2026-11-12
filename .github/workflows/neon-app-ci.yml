@@ -1,0 +1,36 @@
+name: Neon app CI
+
+on:
+  push:
+    paths:
+      - "neon-app/**"
+      - ".github/workflows/neon-app-ci.yml"
+  pull_request:
+    paths:
+      - "neon-app/**"
+      - ".github/workflows/neon-app-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: neon-app
+    env:
+      DEMO_MODE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: neon-app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build

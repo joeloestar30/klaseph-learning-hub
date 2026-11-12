@@ -1,5 +1,5 @@
-const CACHE = 'klaseph-neon-shell-v2';
-const ASSETS = ['./','./index.html','./styles.css?v=neon1','./auth-enhancements.css?v=neon1','./mobile-enhancements.css?v=neon1','./ellna.css','./ellna.js','./manifest.json','./assets/icon.svg'];
+const CACHE = 'klaseph-neon-shell-v5';
+const ASSETS = ['./','./index.html','./app.js?v=neon1','./observability.js','./cloud-data.js','./classroom-operations.js','./access-management.js','./styles.css?v=neon1','./auth-enhancements.css?v=neon1','./mobile-enhancements.css?v=neon1','./ellna.css','./ellna.js','./manifest.json','./assets/icon.svg'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('klaseph-neon-') && key !== CACHE).map(key => caches.delete(key))))));
 self.addEventListener('fetch', event => {
