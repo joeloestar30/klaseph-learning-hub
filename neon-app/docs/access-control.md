@@ -15,6 +15,10 @@ Direct administrator invitations and direct promotion through the user directory
 
 To enable the read-only Admin **Preview** action, apply `database/admin-view-as.sql` as the database owner after the access-control and permission-enforcement migrations. The `public.admin_preview_user` RPC checks scoped `users.view` permission and returns only the selected active teacher/student's classes, activities, teacher roster names, and related submissions. It does not change the authenticated identity or grant additional permissions. The app keeps the preview read-only and exits it back to the Admin directory.
 
+## Teacher student enrollment
+
+To enable teacher self-service enrollment, apply `database/teacher-enrollment.sql` as the database owner after `database/schema.sql` and `database/permission-enforcement.sql`, then deploy the matching frontend. The RPCs only expose active students at the class's assigned school, exclude students already enrolled, and recheck that the caller actively teaches the class and that the student belongs to that school before inserting a membership. Successful enrollments are audited. Teachers can also continue sharing a class join code or importing a roster.
+
 ## Scope model
 
 - `platform`: all schools and classes.
@@ -26,7 +30,7 @@ Authorization combines an active assignment, the role's permission set, and a ma
 
 ## Deployment order
 
-For an existing installation, back up the database and apply `database/access-control.sql` followed by `database/permission-enforcement.sql` as the database owner. Deploy the matching frontend only after both migrations succeed. Validate at least one active platform super-administrator assignment before ending the maintenance window.
+For an existing installation, back up the database and apply `database/access-control.sql` followed by `database/permission-enforcement.sql` as the database owner. Apply feature-specific migrations such as `database/teacher-enrollment.sql` only after their prerequisites succeed. Deploy the matching frontend only after migrations succeed. Validate at least one active platform super-administrator assignment before ending the maintenance window.
 
 The second migration removes privileged reliance on `profiles.role`, bootstraps existing teacher access, retires direct admin invites/promotions, and replaces affected row-level policies and helper functions.
 

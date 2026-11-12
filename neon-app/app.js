@@ -872,6 +872,7 @@ function classesView() {
         <div class="panel-title"><h3>${t("classes")}</h3></div>
         <div class="list">${myClasses().map(classItem).join("") || empty()}</div>
       </div>
+      ${window.KLASEPH_CLASSROOM?.enrollmentPanel()||''}
       ${window.KLASEPH_CLASSROOM?.rosterPanel()||''}
     </section>
   `;
