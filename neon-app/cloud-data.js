@@ -1,5 +1,6 @@
 (() => {
   const ADMIN_ONLY = new Set(['schools','admin_invites','audit_logs']);
+  const OPTIONAL_VIEWS = new Set(['teacher_attempt_reviews','teacher_attempt_answers','teacher_item_analysis','teacher_competency_performance']);
   const CORE = ['classes','class_members','activities','submissions','announcements','profiles','system_settings','interventions','attendance','teacher_attempt_reviews','teacher_attempt_answers','teacher_item_analysis','teacher_competency_performance','competencies','access_roles','access_assignment_directory','access_request_queue','access_monitoring'];
   const ASSESSMENTS = ['student_exams','student_questions','student_question_choices'];
   const orderBy = {activities:'created_at',submissions:'submitted_at',announcements:'created_at',audit_logs:'created_at',interventions:'created_at'};
@@ -13,7 +14,8 @@
       // Feature views are deployed independently from the core application. A
       // temporarily stale Neon/PostgREST schema cache must not prevent users
       // from signing in or administrators from reaching Access Management.
-      if(error.code==='PGRST205'||error.code==='42P01'){
+      const missingOptionalView=OPTIONAL_VIEWS.has(name)&&/could not find the table|schema cache/i.test(error.message||'');
+      if(error.code==='PGRST205'||error.code==='42P01'||missingOptionalView){
         window.KLASEPH_MONITOR?.capture('database_optional',error,{table:name,operation:'select'});
         return [];
       }
