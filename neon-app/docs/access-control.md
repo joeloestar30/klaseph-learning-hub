@@ -11,6 +11,10 @@ KlasePH authorizes privileged actions from active records in `access_assignments
 
 Direct administrator invitations and direct promotion through the user directory are retired. Account status and student/teacher identity can still be managed from the user directory.
 
+## Admin user preview
+
+To enable the read-only Admin **Preview** action, apply `database/admin-view-as.sql` as the database owner after the access-control and permission-enforcement migrations. The `public.admin_preview_user` RPC checks scoped `users.view` permission and returns only the selected active teacher/student's classes, activities, teacher roster names, and related submissions. It does not change the authenticated identity or grant additional permissions. The app keeps the preview read-only and exits it back to the Admin directory.
+
 ## Scope model
 
 - `platform`: all schools and classes.

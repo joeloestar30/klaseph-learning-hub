@@ -21,6 +21,7 @@ const seed = {
   view: "dashboard",
   adminTab: "directory",
   currentUserId: "u1",
+  previewUserId: null,
   users: [
     { id: "u0", name: "Admin Reyes", email: "admin@klaseph.test", password: "admin123", role: "super_admin", school: "San Isidro National High School", status: "active" },
     { id: "u1", name: "Maria Santos", email: "teacher@klaseph.test", password: "teacher123", role: "teacher", school: "San Isidro National High School" },
@@ -301,10 +302,19 @@ async function loadCloudData(userId) {
   if (profileError) throw profileError;
 
   const current = mapProfile(profile);
-  const ownAccess=await sb.from("access_assignment_directory").select("*").eq("user_id",current.id);
-  if(ownAccess.error)throw ownAccess.error;
-  const activeAccess=(ownAccess.data||[]).filter(item=>!item.revoked_at&&(!item.expires_at||new Date(item.expires_at)>new Date()));
-  const isAdminAccount=activeAccess.some(item=>["school_admin","division_admin","super_admin"].includes(item.role_id));
+  state.currentUserId=current.id;
+  // The signed-in profile is already verified. Treat its admin identity as a
+  // fallback if the scoped assignment view is temporarily empty/unavailable.
+  // This prevents an admin from being routed through the restricted user load.
+  const {data:ownAccessRows,error:ownAccessError}=await sb.from("access_assignment_directory").select("*").eq("user_id",current.id);
+  if(ownAccessError)window.KLASEPH_MONITOR?.capture("database",ownAccessError,{operation:"load own access assignments"});
+  const activeAccess=(ownAccessRows||[]).filter(item=>!item.revoked_at&&(!item.expires_at||new Date(item.expires_at)>new Date()));
+  // Use the authoritative compatibility profile role to select the admin data
+  // loading path. Access assignments determine UI privileges separately; an
+  // empty assignment directory must not silently make the user directory look
+  // empty for an existing administrator.
+  const isAdminAccount=["school_admin","division_admin","super_admin"].includes(current.role)
+    || activeAccess.some(item=>["school_admin","division_admin","super_admin"].includes(item.role_id));
   const rows=await window.KLASEPH_CLOUD_DATA.load(sb,{isAdmin:isAdminAccount,
     directoryPage:state.directoryPage||0,auditPage:state.auditPage||0,dataSaver:Boolean(state.dataSaver||navigator.connection?.saveData)});
   state={...state,currentUserId:current.id,directoryPage:state.directoryPage||0,auditPage:state.auditPage||0};
@@ -373,6 +383,34 @@ async function refreshCloudTables(names){
   if(!cloudMode)return;
   const rows=await window.KLASEPH_CLOUD_DATA.fetchTables(sb,names,{isAdmin:isAdmin(),directoryPage:state.directoryPage||0,auditPage:state.auditPage||0,dataSaver:Boolean(state.dataSaver||navigator.connection?.saveData)});
   applyCloudRows(rows);
+}
+
+async function startUserPreview(targetUserId) {
+  if (!isAdmin() || state.previewUserId) return;
+  const target=(state.directoryUsers||state.users).find((item)=>item.id===targetUserId);
+  if (!target || !["teacher","student"].includes(target.role) || target.status!=="active") return toast("Only active Teacher and Student accounts can be previewed.");
+  if (!cloudMode) {
+    state.previewUserId=target.id;
+    state.view="dashboard";
+    render();
+    return;
+  }
+  try {
+    const {data,error}=await callRpc("admin_preview_user",{target_user_id_input:target.id});
+    if(error) throw error;
+    state.userPreviewData=data;
+    state.previewUserId=target.id;
+    state.view="dashboard";
+    render();
+  } catch(error) { reportCloudError(error,"load read-only user preview"); }
+}
+
+function stopUserPreview() {
+  state.previewUserId=null;
+  state.userPreviewData=null;
+  state.view="admin";
+  state.adminTab="directory";
+  render();
 }
 
 function reportCloudError(error,operation="database mutation"){
@@ -533,10 +571,38 @@ function toActivityRow(activity) {
 }
 
 function user() {
-  return state.users.find((item) => item.id === state.currentUserId);
+  return state.users.find((item) => item.id === (state.previewUserId || state.currentUserId));
+}
+
+function previewSubmissions() {
+  if (!state.previewUserId || !state.userPreviewData) return state.submissions;
+  return (state.userPreviewData.submissions||[]).map(mapSubmission);
+}
+
+function previewActivitySource() {
+  if (!state.previewUserId || !state.userPreviewData) return state.activities;
+  return (state.userPreviewData.activities||[]).map(mapActivity);
+}
+
+function previewMembershipSource() {
+  if (!state.previewUserId || !state.userPreviewData) return state.memberships;
+  return (state.userPreviewData.students||[]).map((item)=>({classId:item.class_id,userId:item.student_id,attendance:item.attendance||"present",name:item.name||"Learner"}));
+}
+
+function previewClassSource() {
+  if (!state.previewUserId || !state.userPreviewData) return state.classes;
+  return (state.userPreviewData.classes||[]).map(mapClass);
+}
+
+function previewPerson(userId) {
+  if (!state.previewUserId || !state.userPreviewData) return state.users.find((item)=>item.id===userId);
+  if (userId===state.previewUserId) return user();
+  const member=previewMembershipSource().find((item)=>item.userId===userId);
+  return member ? {id:userId,name:member.name||"Learner",role:"student",school:user()?.school||""} : undefined;
 }
 
 function role() {
+  if (state.previewUserId) return String(user()?.role || "student").trim();
   if(cloudMode){
     const assignments=(state.accessAssignments||[]).filter(item=>item.user_id===state.currentUserId&&!item.revoked_at&&(!item.expires_at||new Date(item.expires_at)>new Date()));
     for(const candidate of ["super_admin","division_admin","school_admin","teacher"]){if(assignments.some(item=>item.role_id===candidate))return candidate;}
@@ -545,10 +611,12 @@ function role() {
 }
 
 function isAdmin() {
+  if (state.previewUserId) return false;
   return ["super_admin","division_admin","school_admin"].includes(role());
 }
 
 function canTeach() {
+  if (state.previewUserId) return role() === "teacher";
   if(isAdmin()||role()==="teacher")return true;
   return cloudMode&&(state.accessAssignments||[]).some(item=>item.user_id===state.currentUserId&&["assessment_coordinator","grade_coordinator"].includes(item.role_id)&&!item.revoked_at);
 }
@@ -559,10 +627,12 @@ function t(key) {
 
 function teacherClasses() {
   if (isAdmin()) return activeClasses();
-  return activeClasses().filter((item) => item.teacherId === user().id);
+  if (state.previewUserId && state.userPreviewData) return (state.userPreviewData.classes||[]).map(mapClass).filter(item=>!item.archivedAt);
+  return activeClasses().filter((item) => item.teacherId === user()?.id);
 }
 
 function studentClasses() {
+  if (state.previewUserId && state.userPreviewData) return (state.userPreviewData.classes||[]).map(mapClass).filter(item=>!item.archivedAt);
   const ids = state.memberships.filter((item) => item.userId === user().id).map((item) => item.classId);
   return activeClasses().filter((item) => ids.includes(item.id));
 }
@@ -573,7 +643,7 @@ function myClasses() {
 
 function myActivities() {
   const ids = myClasses().map((item) => item.id);
-  return state.activities.filter((item) => ids.includes(item.classId) && !item.archivedAt);
+  return previewActivitySource().filter((item) => ids.includes(item.classId) && !item.archivedAt);
 }
 
 function activeClasses() {
@@ -631,6 +701,7 @@ function render() {
             ${cloudMode ? "" : `<button class="ghost" id="reset">${t("reset")}</button>`}
           </div>
         </section>
+        ${state.previewUserId ? `<div class="standard-box"><b>Read-only user preview</b><span>Viewing ${esc(user()?.name || "user")} · ${esc(role())}. Data loaded through the Admin-only scoped preview. Changes are disabled.</span><button class="ghost" id="exitUserPreview">Exit preview</button></div>` : ""}
         ${route()}
       </main>
     </div>
@@ -641,6 +712,9 @@ function render() {
 }
 
 function navItems() {
+  if (state.previewUserId) return role() === "teacher"
+    ? ["dashboard", "classes", "activities", "exams", "records", "monitoring", "users", "ellna"]
+    : ["dashboard", "classes", "activities", "exams", "records", "ellna"];
   if (isAdmin()) return ["dashboard", "admin", "users", "classes", "activities", "exams", "records", "monitoring", "ellna"];
   return canTeach()
     ? ["dashboard", "classes", "activities", "exams", "records", "monitoring", "users", "ellna"]
@@ -648,6 +722,7 @@ function navItems() {
 }
 
 function route() {
+  if (state.previewUserId && state.view === "admin") return dashboardView();
   if (state.view === 'ellna') return window.ellnaView ? window.ellnaView() : '';
   if (state.view === "admin") return adminUsersView();
   if (state.view === "classes") return classesView();
@@ -701,8 +776,9 @@ function authScreen() {
 function dashboardView() {
   if (isAdmin()) return adminDashboardView();
   const activities = myActivities();
-  const autoSubs = state.submissions.filter((s) => s.score !== null && activities.some((a) => a.id === s.activityId));
-  const manual = state.submissions.filter((s) => s.score === null && activities.some((a) => a.id === s.activityId));
+  const submissions = previewSubmissions();
+  const autoSubs = submissions.filter((s) => s.score !== null && activities.some((a) => a.id === s.activityId));
+  const manual = submissions.filter((s) => s.score === null && activities.some((a) => a.id === s.activityId));
   const localWarning = cloudMode ? "" : `
       <div class="standard-box">
         <b>Local demo mode</b>
@@ -740,8 +816,8 @@ function dashboardView() {
 }
 
 function adminDashboardView() {
-  const autoSubs = state.submissions.filter((s) => s.score !== null);
-  const manual = state.submissions.filter((s) => s.score === null);
+  const autoSubs = previewSubmissions().filter((s) => s.score !== null);
+  const manual = previewSubmissions().filter((s) => s.score === null);
   return `
     <section class="hero">
       <div>
@@ -848,9 +924,10 @@ function examsView() {
 
 function recordsView() {
   const activities = myActivities();
+  const submissionsSource = previewSubmissions();
   const submissions = canTeach()
-    ? state.submissions.filter((s) => activities.some((a) => a.id === s.activityId))
-    : state.submissions.filter((s) => s.studentId === user().id);
+    ? submissionsSource.filter((s) => activities.some((a) => a.id === s.activityId))
+    : submissionsSource.filter((s) => s.studentId === user().id);
 
   return `
     <section class="grid">
@@ -905,25 +982,32 @@ function monitoringView() {
 
 function usersView() {
   if (isAdmin()) return adminUsersView();
+  const students = teacherStudents();
   return `
     <section class="grid">
-      <div class="composer span-4">
-        <div class="panel-title"><h3>${t("createAccount")}</h3></div>
-        ${cloudMode ? `<div class="standard-box"><b>Cloud account creation</b><span>For security, each teacher or student creates their own account from the sign-up screen. This page shows visible class users after they join classes.</span></div>` : `<form id="userForm" class="form-grid">
-          <label class="full">Name<input name="name" required></label>
-          <label>Role<select name="role"><option value="student">Student</option><option value="teacher">Teacher</option></select></label>
-          <label>School<input name="school" value="${esc(user().school || "")}"></label>
-          <label class="full">Email<input name="email" type="email" required></label>
-          <label class="full">Password<input name="password" type="text" value="student123" required></label>
-          <button class="button full">${t("save")}</button>
-        </form>`}
-      </div>
-      <div class="panel span-8">
-        <div class="panel-title"><h3>Accounts</h3></div>
-        <div class="table-wrap">${usersTable()}</div>
+      <div class="panel span-12">
+        <div class="panel-title"><h3>My Students</h3><span class="muted">${students.length} enrolled accounts</span></div>
+        <p class="muted">Students are shown only when they are enrolled in one of your active classes. This list is read-only.</p>
+        <div class="table-wrap">${teacherStudentsTable(students)}</div>
       </div>
     </section>
   `;
+}
+
+function teacherStudents() {
+  const classIds = new Set(teacherClasses().map((item) => item.id));
+  const memberships=previewMembershipSource().filter((item)=>classIds.has(item.classId));
+  const studentIds = new Set(memberships.map((item) => item.userId));
+  if(state.previewUserId) return [...studentIds].map((id)=>previewPerson(id)).filter(Boolean);
+  return state.users.filter((item) => studentIds.has(item.id) && item.role === "student" && item.status !== "archived");
+}
+
+function teacherStudentsTable(students) {
+  const rows = students.map((student) => {
+    const classes = teacherClasses().filter((classItem) => previewMembershipSource().some((membership) => membership.classId === classItem.id && membership.userId === student.id));
+    return `<tr><td>${esc(student.name)}</td><td>${esc(student.school || "")}</td><td>${classes.map((item) => esc(item.name)).join(", ")}</td><td><span class="chip green">Enrolled</span></td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Student</th><th>School</th><th>My class(es)</th><th>Status</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No students are enrolled in your active classes.</td></tr>`}</tbody></table>`;
 }
 
 function adminUsersView() {
@@ -1340,8 +1424,8 @@ function classItem(item) {
 }
 
 function activityItem(item) {
-  const className = state.classes.find((c) => c.id === item.classId)?.name || "Class";
-  const submissions = state.submissions.filter((s) => s.activityId === item.id);
+  const className = previewClassSource().find((c) => c.id === item.classId)?.name || "Class";
+  const submissions = previewSubmissions().filter((s) => s.activityId === item.id);
   const standard = item.standard ? `${item.standard.grade} · ${item.standard.quarter} · ${item.standard.component}` : "Classroom task";
   const upload = item.standard?.upload;
   const badge = item.mode === "auto" ? "Auto-check" : upload ? "Uploaded file" : "Manual";
@@ -1358,23 +1442,24 @@ function activityItem(item) {
 }
 
 function announcementItem(item) {
-  const className = state.classes.find((c) => c.id === item.classId)?.name || "Class";
+  const className = previewClassSource().find((c) => c.id === item.classId)?.name || "Class";
   return `<article class="item"><h4>${esc(item.message)}</h4><div class="muted">${esc(className)} · ${esc(item.date)}</div></article>`;
 }
 
 function progressItems() {
+  const submissionsSource=previewSubmissions();
   if (!canTeach()) {
-    const submissions = state.submissions.filter((s) => s.studentId === user().id);
+    const submissions = submissionsSource.filter((s) => s.studentId === user().id);
     return myActivities().map((a) => {
       const sub = submissions.find((s) => s.activityId === a.id);
       return `<article class="item"><div class="item-head"><h4>${esc(a.title)}</h4><span class="chip ${sub ? "green" : "gold"}">${sub ? "Submitted" : "To do"}</span></div><div class="muted">${sub?.score ?? "-"} / ${totalPoints(a)}</div></article>`;
     });
   }
 
-  const members = state.memberships.filter((m) => teacherClasses().some((c) => c.id === m.classId));
+  const members = previewMembershipSource().filter((m) => teacherClasses().some((c) => c.id === m.classId));
   return members.map((m) => {
-    const learner = state.users.find((u) => u.id === m.userId);
-    const learnerSubs = state.submissions.filter((s) => s.studentId === m.userId);
+    const learner = previewPerson(m.userId);
+    const learnerSubs = submissionsSource.filter((s) => s.studentId === m.userId);
     const scored = learnerSubs.filter((s) => s.score !== null);
     const score = scored.length ? Math.round(scored.reduce((sum, s) => sum + (s.score / Math.max(s.maxScore, 1)) * 100, 0) / scored.length) : 0;
     return `<article class="item"><div class="item-head"><h4>${esc(learner?.name || "Learner")}</h4><span class="chip ${m.attendance === "present" ? "green" : "gold"}">${esc(m.attendance)}</span></div><div class="muted">${score}% average across checked work</div></article>`;
@@ -1384,17 +1469,18 @@ function progressItems() {
 function monitoredLearners() {
   const classes = teacherClasses();
   const classIds = classes.map((item) => item.id);
-  const activities = state.activities.filter((item) => classIds.includes(item.classId) && !item.archivedAt);
-  const memberships = state.memberships.filter((m) => classIds.includes(m.classId));
+  const activities = previewActivitySource().filter((item) => classIds.includes(item.classId) && !item.archivedAt);
+  const submissionsSource=previewSubmissions();
+  const memberships = previewMembershipSource().filter((m) => classIds.includes(m.classId));
   const keys = new Set();
   return memberships.map((m) => {
     const key = `${m.classId}:${m.userId}`;
     if (keys.has(key)) return null;
     keys.add(key);
-    const learner = state.users.find((u) => u.id === m.userId);
-    const classItem = state.classes.find((c) => c.id === m.classId);
+    const learner = previewPerson(m.userId);
+    const classItem = previewClassSource().find((c) => c.id === m.classId);
     const classActivities = activities.filter((a) => a.classId === m.classId);
-    const learnerSubs = state.submissions.filter((s) => s.studentId === m.userId && classActivities.some((a) => a.id === s.activityId));
+    const learnerSubs = submissionsSource.filter((s) => s.studentId === m.userId && classActivities.some((a) => a.id === s.activityId));
     const scored = learnerSubs.filter((s) => s.score !== null && s.score !== undefined);
     const average = scored.length ? Math.round(scored.reduce((sum, s) => sum + (Number(s.score || 0) / Math.max(Number(s.maxScore || 1), 1)) * 100, 0) / scored.length) : 0;
     const missing = classActivities.filter((a) => !learnerSubs.some((s) => s.activityId === a.id)).length;
@@ -1489,8 +1575,8 @@ function interventionItem(item) {
 
 function recordTable(submissions) {
   const rows = submissions.map((s) => {
-    const activity = state.activities.find((a) => a.id === s.activityId);
-    const student = state.users.find((u) => u.id === s.studentId);
+    const activity = previewActivitySource().find((a) => a.id === s.activityId);
+    const student = previewPerson(s.studentId);
     return `<tr><td>${esc(student?.name || "Learner")}</td><td>${esc(activity?.title || "Activity")}</td><td>${s.score ?? "For checking"} / ${s.maxScore ?? totalPoints(activity)}</td><td>${esc(s.feedback || "No feedback yet")}</td></tr>`;
   }).join("");
   return `<table><thead><tr><th>Learner</th><th>Activity</th><th>Score</th><th>Feedback</th></tr></thead><tbody>${rows || `<tr><td colspan="4">${t("noItems")}</td></tr>`}</tbody></table>`;
@@ -1562,6 +1648,8 @@ function adminUsersTable() {
     // Management supplement these roles; they must not make an existing
     // school or super administrator appear to have been changed to Teacher.
     const legacyRole = ["student", "teacher", "school_admin", "super_admin"].includes(u.role) ? u.role : "student";
+    const scope = u.role === "teacher" ? adminTeacherScope(u.id) : null;
+    const previewable = ["teacher", "student"].includes(u.role) && u.status !== "archived";
     return `
     <tr>
       <td>${esc(u.name)}</td>
@@ -1578,17 +1666,28 @@ function adminUsersTable() {
         </select>
       </td>
       <td><span class="chip ${u.status === "active" ? "green" : "gold"}">${esc(u.status || "active")}</span></td>
+      <td>${scope ? `${scope.classes.length} class(es) · ${scope.students.length} student(s)` : "—"}</td>
       <td>
         <div class="row-actions">
           <button class="ghost" data-save-user="${u.id}">Save</button>
           ${u.status === "suspended" ? `<button class="ghost" data-status-user="${u.id}" data-status="active">Restore</button>` : `<button class="danger" data-status-user="${u.id}" data-status="suspended" ${u.id === user().id ? "disabled" : ""}>Suspend</button>`}
           <button class="danger" data-status-user="${u.id}" data-status="archived" ${u.id === user().id ? "disabled" : ""}>Archive</button>
+          ${scope ? `<button class="ghost" data-teacher-scope="${u.id}">${state.teacherScopePreviewUserId === u.id ? "Hide scope" : "View scope"}</button>` : ""}
+          ${previewable ? `<button class="ghost" data-preview-user="${u.id}">Preview</button>` : ""}
         </div>
       </td>
     </tr>
   `;
   }).join("");
-  return `<p class="muted">Existing profile roles are retained here. Access Management adds scoped permissions without replacing them.</p><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
+  return `<p class="muted">Use <b>View scope</b> on a Teacher to verify exactly which classes and students are visible to that account.</p><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Visibility</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="7">${t("noItems")}</td></tr>`}</tbody></table>`;
+}
+
+function adminTeacherScope(teacherId) {
+  const classes = activeClasses().filter((item) => item.teacherId === teacherId);
+  const classIds = new Set(classes.map((item) => item.id));
+  const studentIds = new Set(state.memberships.filter((item) => classIds.has(item.classId)).map((item) => item.userId));
+  const students = state.users.filter((item) => studentIds.has(item.id) && item.role === "student" && item.status !== "archived");
+  return { classes, students };
 }
 
 function schoolsTable() {
@@ -1647,14 +1746,24 @@ function bindAuth() {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
     if (cloudMode) {
+      cloudError = "";
       const { data: authData, error } = await sb.auth.signInWithPassword({
         email: data.email,
         password: data.password
       });
     if (error) return reportCloudError(error);
-      await loadCloudData(authData.user.id);
-      state.view = "dashboard";
-      render();
+      try {
+        await loadCloudData(authData.user.id);
+      } catch (loadError) {
+        window.KLASEPH_MONITOR?.capture("database",loadError,{operation:"load profile after sign in"});
+        cloudError = loadError.message || String(loadError);
+        booting = false;
+        renderCloudError();
+      }
+      if (!cloudError) {
+        state.view = "dashboard";
+        render();
+      }
       return;
     }
     const found = state.users.find((item) => item.email.toLowerCase() === data.email.toLowerCase() && item.password === data.password);
@@ -1754,6 +1863,10 @@ function bind() {
     persist();
     render();
   });
+  if (state.previewUserId) {
+    document.querySelector("#exitUserPreview")?.addEventListener("click", stopUserPreview);
+    return;
+  }
   document.querySelector("#switchAdminDemo")?.addEventListener("click", () => {
     const admin = state.users.find((item) => item.email === "admin@klaseph.test");
     if (!admin) return toast("Reset demo data to add the admin account.");
@@ -1793,6 +1906,18 @@ function bind() {
   });
   document.querySelectorAll("[data-status-user]").forEach((button) => {
     button.addEventListener("click", () => saveAdminUser(button.dataset.statusUser, button.dataset.status));
+  });
+  document.querySelectorAll("[data-teacher-scope]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.teacherScopePreviewUserId = state.teacherScopePreviewUserId === button.dataset.teacherScope ? "" : button.dataset.teacherScope;
+      const teacher = state.users.find((item) => item.id === button.dataset.teacherScope);
+      const scope = teacher ? adminTeacherScope(teacher.id) : { classes: [], students: [] };
+      toast(`${teacher?.name || "Teacher"}: ${scope.classes.length} class(es), ${scope.students.length} visible student(s). ${scope.classes.map((item) => item.name).join(", ") || "No active class assignment."}`);
+      render();
+    });
+  });
+  document.querySelectorAll("[data-preview-user]").forEach((button) => {
+    button.addEventListener("click", () => startUserPreview(button.dataset.previewUser));
   });
   document.querySelectorAll("[data-save-class]").forEach((button) => {
     button.addEventListener("click", () => saveAdminClassEdit(button.dataset.saveClass));
@@ -2691,6 +2816,7 @@ function exportCsv() {
 
 function announcementsForMe() {
   const ids = myClasses().map((item) => item.id);
+  if (state.previewUserId && state.userPreviewData) return (state.userPreviewData.announcements||[]).map(mapAnnouncement).filter((item)=>ids.includes(item.classId));
   return state.announcements.filter((item) => ids.includes(item.classId));
 }
 
