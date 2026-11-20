@@ -1,5 +1,14 @@
 # KlasePH Learning Hub
 
+> [!WARNING]
+> **This root directory is archived.** The active, production-grade codebase has moved to
+> **[neon-app/](neon-app/README.md)**. All new development, bug fixes, and deployments happen there.
+> See [README.archived.md](README.archived.md) for why this directory is kept.
+
+---
+
+## Legacy Supabase Edition (Archived)
+
 A separate mobile-first classroom companion prototype for teachers and students in the Philippines.
 
 This version supports two modes:
