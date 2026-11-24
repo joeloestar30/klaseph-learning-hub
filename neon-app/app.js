@@ -22,6 +22,7 @@ const seed = {
   adminTab: "directory",
   currentUserId: "u1",
   previewUserId: null,
+  examReviewDraft: null,
   users: [
     { id: "u0", name: "Admin Reyes", email: "admin@klaseph.test", password: "admin123", role: "super_admin", school: "San Isidro National High School", status: "active" },
     { id: "u1", name: "Maria Santos", email: "teacher@klaseph.test", password: "teacher123", role: "teacher", school: "San Isidro National High School" },
@@ -905,6 +906,9 @@ function activitiesView() {
 }
 
 function examsView() {
+  if (state.examReviewDraft && window.KLASEPH_EXAM_IMPORTER) {
+    return window.KLASEPH_EXAM_IMPORTER.renderReviewScreen(state.examReviewDraft);
+  }
   return canTeach() ? `
     <section class="grid">
       <div class="composer span-5">
@@ -912,7 +916,7 @@ function examsView() {
         ${examGeneratorForm()}
       </div>
       <div class="composer span-5">
-        <div class="panel-title"><h3>Upload exam draft</h3></div>
+        <div class="panel-title"><h3>Upload Word exam (.docx)</h3></div>
         ${examUploadForm()}
       </div>
       <div class="panel span-7">
@@ -1362,23 +1366,26 @@ function examGeneratorForm() {
 function examUploadForm() {
   return `
     <form id="examUploadForm" class="form-grid">
-      <label class="full">Exam title<input name="title" required placeholder="Quarter 1 Long Test"></label>
+      <label class="full">Exam title<input name="title" required placeholder="Quarter 1 Periodical Test"></label>
       <label>Class<select name="classId" required>${teacherClasses().length ? `<option value="">Choose a class…</option>${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}` : `<option value="" disabled selected>No classes available</option>`}</select></label>
       <label>Due date<input type="date" name="due" required value="2026-08-22"></label>
       <label>Grade level<select name="grade"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option><option selected>Grade 7</option><option>Grade 8</option><option>Grade 9</option><option>Grade 10</option><option>Grade 11</option><option>Grade 12</option></select></label>
       <label>Quarter<select name="quarter"><option>Quarter 1</option><option>Quarter 2</option><option>Quarter 3</option><option>Quarter 4</option></select></label>
-      <label>Subject<select name="subject"><option>Science</option><option>Mathematics</option><option>Filipino</option><option>English</option><option>Araling Panlipunan</option></select></label>
+      <label>Subject<select name="subject"><option>Science</option><option>Mathematics</option><option>Filipino</option><option>English</option><option>Araling Panlipunan</option><option>MAPEH</option><option>TLE / EPP</option><option>Values Education / EsP</option></select></label>
       <label>Assessment component<select name="component"><option>Written Work</option><option>Quarterly Assessment</option><option>Formative Check</option></select></label>
       <label>Time limit<input type="number" name="timeLimit" min="0" value="60" placeholder="Minutes"></label>
-      <label>Total points<input type="number" name="points" min="1" value="50"></label>
-      <label>Availability<select name="status"><option value="Draft" selected>Draft</option><option value="Open">Open to students</option></select></label>
-      <label class="full">Exam file<input type="file" name="examFile" accept="${EXAM_UPLOAD_ACCEPT}" required></label>
+      <label>Processing mode<select name="examMode"><option value="auto_convert" selected>Auto-convert to Online Exam (Auto-Checking)</option><option value="manual_only">File Attachment Only (Manual Grading)</option></select></label>
+      <label class="full">Word document (.docx) or file<input type="file" name="examFile" accept="${EXAM_UPLOAD_ACCEPT}"></label>
+      <details class="full" style="margin-top:4px;">
+        <summary style="cursor:pointer; font-size:0.9rem; color:var(--blue); font-weight:600;">Or paste exam text directly from Word/Docs</summary>
+        <textarea name="pastedExamText" rows="6" placeholder="Paste your questions here... e.g.&#10;1. What is the basic unit of life?&#10;A. Atom&#10;B. Cell&#10;C. Tissue&#10;Answer: B" style="margin-top:6px; font-family:inherit;"></textarea>
+      </details>
       <label class="full">Teacher notes<textarea name="instructions" placeholder="Directions, reminders, or answer sheet instructions for learners."></textarea></label>
       <div class="standard-box full">
-        <b>Draft upload</b>
-        <span>PDF, Word, Excel, or CSV only. Maximum file size is 2 MB in this browser build. Keep new uploads as drafts until they are reviewed and ready.</span>
+        <b>Word Exam Auto-Converter</b>
+        <span>Uploading a Word (.docx) document or pasting questions will automatically extract items, choices, and answer keys into an interactive online exam with instant auto-grading.</span>
       </div>
-      <button class="button full">Upload exam draft</button>
+      <button class="button full">Upload & Extract Exam</button>
     </form>
   `;
 }
@@ -1877,6 +1884,75 @@ async function ensureCloudProfile(id, data) {
 }
 
 function bind() {
+  if (state.examReviewDraft && window.KLASEPH_EXAM_IMPORTER) {
+    document.querySelectorAll("[data-view]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (confirm("Leave exam draft? Unsaved changes will be lost.")) {
+          state.examReviewDraft = null;
+          state.view = button.dataset.view;
+          persist();
+          render();
+        }
+      });
+    });
+    window.KLASEPH_EXAM_IMPORTER.bindReviewScreen(
+      state.examReviewDraft,
+      async (publishedDraft) => {
+        const classItem = state.classes.find((c) => c.id === publishedDraft.classId);
+        const standard = {
+          grade: publishedDraft.grade || "Grade 7",
+          quarter: publishedDraft.quarter || "Quarter 1",
+          subject: publishedDraft.subject || "Science",
+          component: publishedDraft.component || "Written Work",
+          timeLimit: Number(publishedDraft.timeLimit || 0),
+          source: "Word Document Import"
+        };
+        const activity = {
+          id: crypto.randomUUID(),
+          classId: publishedDraft.classId,
+          teacherId: isAdmin() ? classItem?.teacherId || user().id : user().id,
+          title: publishedDraft.title,
+          type: "Exam",
+          mode: "auto",
+          due: publishedDraft.due,
+          status: "Open",
+          instructions: `Online exam: ${publishedDraft.title} (${publishedDraft.questions.length} items)`,
+          standard,
+          questions: publishedDraft.questions.map((q, idx) => ({
+            id: q.id || crypto.randomUUID(),
+            type: q.type,
+            prompt: q.prompt,
+            choices: q.choices,
+            answer: q.answer,
+            points: Number(q.points || 1),
+            item_no: idx + 1,
+            grade: standard.grade,
+            quarter: standard.quarter,
+            subject: standard.subject,
+            component: standard.component
+          }))
+        };
+
+        if (cloudMode) {
+          const { error } = await publishSecureExam(activity);
+          if (error) return reportCloudError(error);
+          await refreshCloudTables(["activities"]);
+        } else {
+          state.activities.unshift(activity);
+        }
+        state.examReviewDraft = null;
+        persist();
+        render();
+        toast("Online exam published! Objective items will be automatically checked upon student submission.");
+      },
+      () => {
+        state.examReviewDraft = null;
+        render();
+      }
+    );
+    return;
+  }
+
   document.querySelectorAll("[data-lang]").forEach((button) => {
     button.addEventListener("click", () => {
       state.lang = button.dataset.lang;
@@ -2141,12 +2217,61 @@ async function saveUploadedExam(event) {
   const formData = new FormData(event.target);
   const data = Object.fromEntries(formData);
   const file = formData.get("examFile");
-  if (!file || !file.name) return toast("Choose an exam file to upload.");
-  if (!isAllowedExamFile(file)) return toast("Use PDF, Word, Excel, or CSV exam files only.");
-  if (file.size > EXAM_UPLOAD_MAX_BYTES) return toast("Exam file must be 2 MB or smaller.");
+  const pastedText = (data.pastedExamText || "").trim();
+
+  if ((!file || !file.name) && !pastedText) {
+    return toast("Choose a Word file (.docx) or paste exam text.");
+  }
+  if (file && file.name && !isAllowedExamFile(file)) {
+    return toast("Use PDF, Word, Excel, or CSV exam files only.");
+  }
+  if (file && file.size > EXAM_UPLOAD_MAX_BYTES) {
+    return toast("Exam file must be 2 MB or smaller.");
+  }
 
   const classItem = state.classes.find((item) => item.id === data.classId);
   if (!classItem) return toast("Choose a class for this exam.");
+
+  const isDocx = file && file.name && file.name.toLowerCase().endsWith(".docx");
+  const convertToOnline = data.examMode !== "manual_only";
+
+  // Branch 1: Auto-convert Word (.docx) or Pasted Text into digital questions
+  if (convertToOnline && (isDocx || pastedText)) {
+    try {
+      let questions = [];
+      if (isDocx && window.KLASEPH_EXAM_IMPORTER) {
+        const paragraphs = await window.KLASEPH_EXAM_IMPORTER.extractDocx(file);
+        questions = window.KLASEPH_EXAM_IMPORTER.parseExamText(paragraphs);
+      } else if (pastedText && window.KLASEPH_EXAM_IMPORTER) {
+        questions = window.KLASEPH_EXAM_IMPORTER.parseExamText(pastedText);
+      }
+
+      if (questions && questions.length > 0) {
+        state.examReviewDraft = {
+          title: data.title || file?.name?.replace(/\.[^/.]+$/, "") || "Quarterly Exam",
+          classId: data.classId,
+          due: data.due,
+          grade: data.grade,
+          quarter: data.quarter,
+          subject: data.subject,
+          component: data.component,
+          timeLimit: Number(data.timeLimit || 60),
+          questions
+        };
+        render();
+        toast(`Extracted ${questions.length} questions! Review answer keys and click Publish.`);
+        return;
+      } else {
+        toast("No numbered questions detected. Attaching file for manual grading instead.");
+      }
+    } catch (err) {
+      console.warn("Word parser notice:", err);
+      toast(`Word extraction notice: ${err.message}. Attaching file instead.`);
+    }
+  }
+
+  // Branch 2: Standard file attachment for manual grading
+  if (!file || !file.name) return toast("Choose a file to attach.");
 
   let upload;
   try {

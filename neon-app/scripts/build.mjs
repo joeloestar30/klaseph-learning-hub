@@ -19,7 +19,7 @@ for (const key of ['NEON_AUTH_URL', 'NEON_DATA_API_URL']) {
 }
 await mkdir('dist', { recursive: true });
 await build({stdin:{contents:clientSource,resolveDir:appRoot,sourcefile:'client.js'}, alias:{'@neondatabase/neon-js':neonClientEntry}, outfile:'dist/neon-client.js', bundle:true, format:'iife', platform:'browser', target:'es2022', minify:true});
-for (const name of ['index.html','app.js','auth-enhancements.js','onboarding-persistence.js','mobile-enhancements.js','neon-onboarding.js','observability.js','cloud-data.js','classroom-operations.js','access-management.js','styles.css','auth-enhancements.css','mobile-enhancements.css','manifest.json','sw.js','_headers']) {
+for (const name of ['index.html','app.js','auth-enhancements.js','onboarding-persistence.js','mobile-enhancements.js','neon-onboarding.js','observability.js','cloud-data.js','classroom-operations.js','access-management.js','exam-docx-importer.js','styles.css','auth-enhancements.css','mobile-enhancements.css','manifest.json','sw.js','_headers']) {
   await cp(name, `dist/${name}`);
 }
 await cp('assets', 'dist/assets', {recursive:true});
