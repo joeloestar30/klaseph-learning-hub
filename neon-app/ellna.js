@@ -21,22 +21,73 @@
     student_id:row.student_id,status:row.status,submitted_at:row.submitted_at,resubmitted_at:row.resubmitted_at,
     reviewed_at:row.reviewed_at,correction_note:row.correction_note,retention_until:row.retention_until,revision:row.revision});
   function availableClasses() { return isStudent() ? studentClasses() : teacherClasses(); }
+  function classMemberships(targetClassId) {
+    if (!targetClassId) return [];
+    const source = typeof previewMembershipSource === 'function' ? previewMembershipSource() : (state.memberships || []);
+    return source.filter(m => m.classId === targetClassId);
+  }
+  function resolveLearner(member) {
+    const userId = member.userId;
+    if (typeof previewPerson === 'function') {
+      const p = previewPerson(userId);
+      if (p && p.name) return { id: userId, name: p.name, role: p.role || 'student' };
+    }
+    const pool = [...(state.users || []), ...(state.directoryUsers || [])];
+    const found = pool.find(u => u.id === userId);
+    if (found && found.name) return { id: userId, name: found.name, role: found.role || 'student' };
+    return { id: userId, name: member.name || 'Learner', role: 'student' };
+  }
+  function availableLearners(targetClassId) {
+    if (!targetClassId) return [];
+    return classMemberships(targetClassId).map(resolveLearner);
+  }
   function contextFields(readOnly) {
-    const classes=availableClasses(),classId=current.class_id||classes[0]?.id||'';
-    const learnerIds=new Set(state.memberships.filter(m=>m.classId===classId).map(m=>m.userId));
-    const learners=state.users.filter(item=>item.role==='student'&&learnerIds.has(item.id));
-    return `<fieldset ${readOnly?'disabled':''}><legend>School workflow</legend><div class="form-grid"><label>Class<select name="class_id" id="ellnaClass" required><option value="">Choose…</option>${classes.map(item=>`<option value="${item.id}" ${item.id===classId?'selected':''}>${e(item.name)} · ${e(item.subject)}</option>`).join('')}</select></label>${isStudent()?'':`<label>Learner<select name="student_id" required><option value="">Choose…</option>${learners.map(item=>`<option value="${item.id}" ${item.id===current.student_id?'selected':''}>${e(item.name)}</option>`).join('')}</select></label>`}</div></fieldset>`;
+    const classes = availableClasses();
+    const classId = current.class_id !== undefined ? current.class_id : (classes[0]?.id || '');
+    if (current.class_id === undefined && classId) {
+      current.class_id = classId;
+    }
+    const learners = classId ? availableLearners(classId) : [];
+    const hasClasses = classes.length > 0;
+    const hasLearners = learners.length > 0;
+
+    let warningNotice = '';
+    if (!hasClasses) {
+      warningNotice = `<p class="field-notice" style="grid-column:1/-1;margin:4px 0 0 0;font-size:13px;color:#c53030;">No active classes available. Please create a class first.</p>`;
+    } else if (classId && !hasLearners && !isStudent()) {
+      warningNotice = `<p class="field-notice" style="grid-column:1/-1;margin:4px 0 0 0;font-size:13px;color:#c53030;">No learners are enrolled in this class. Please enroll students first in the Classes section before saving ELLNA forms for them.</p>`;
+    }
+
+    const classOptions = hasClasses
+      ? `<option value="">Choose a class…</option>${classes.map(item => `<option value="${item.id}" ${item.id === classId ? 'selected' : ''}>${e(item.name)} · ${e(item.subject)}</option>`).join('')}`
+      : `<option value="">No classes available</option>`;
+
+    let learnerField = '';
+    if (!isStudent()) {
+      let learnerOptions = '';
+      if (!classId) {
+        learnerOptions = `<option value="">Choose a class first…</option>`;
+      } else if (!hasLearners) {
+        learnerOptions = `<option value="">No learners enrolled in this class</option>`;
+      } else {
+        learnerOptions = `<option value="">Choose a learner…</option>${learners.map(item => `<option value="${item.id}" ${item.id === current.student_id ? 'selected' : ''}>${e(item.name)}</option>`).join('')}`;
+      }
+      learnerField = `<label>Learner<select name="student_id" id="ellnaLearner" ${readOnly ? 'disabled' : 'required'}>${learnerOptions}</select></label>`;
+    }
+
+    return `<fieldset ${readOnly ? 'disabled' : ''}><legend>School workflow</legend><div class="form-grid"><label>Class<select name="class_id" id="ellnaClass" required>${classOptions}</select></label>${learnerField}${warningNotice}</div></fieldset>`;
   }
   function input([key,label,type='text',options]) {
     const v=current[key] || '';
     return `<label>${e(label)}${type==='select' ? `<select name="${key}"><option value="">Choose…</option>${options.split('|').map(o=>`<option ${o===v?'selected':''}>${e(o)}</option>`).join('')}</select>` : `<input name="${key}" type="${type}" value="${e(v)}" ${type==='number'?'min="0" max="'+(key==='class_size'?'99':'100')+'" step="1"':''} ${key==='lrn'?'inputmode="numeric" pattern="[0-9]{12}" maxlength="12"':key.startsWith('school_id')?'inputmode="numeric" pattern="[0-9]{6}" maxlength="6"':''} ${key==='middle_initial'?'maxlength="2"':''} ${['last_name','first_name'].includes(key)?'required':''}>`}</label>`;
   }
   window.ellnaView = () => {
-    if(owner!==user().id) {owner=user().id;current={};saved=[];}
+    const currentUserId = user()?.id;
+    if(owner!==currentUserId) {owner=currentUserId;current={};saved=[];}
     const status=statusOf(current),readOnly=['submitted','reviewed','deletion_requested','deleted'].includes(status);
     const banner=status==='needs_correction'?`<div class="submission-banner">Correction requested: ${e(current.correction_note||'Review the form and resubmit it.')}</div>`:status!=='draft'?`<div class="submission-banner">Status: ${e(status.replaceAll('_',' '))}${current.retention_until?` · Retained until ${e(current.retention_until)}`:''}</div>`:'';
     const workflowButtons=!current.id?'':`${status==='submitted'&&!isStudent()?'<button class="button" type="button" data-ellna-review="review">Mark reviewed</button><button class="ghost" type="button" data-ellna-review="request_correction">Request correction</button>':''}<button class="ghost" type="button" id="ellnaExport">Export JSON</button>${status!=='deletion_requested'&&status!=='deleted'?'<button class="ghost" type="button" id="ellnaDelete">Request deletion</button>':''}`;
-    return `<section class="card ellna ${isStudent()?'student-ellna':''}"><h2>${isStudent()?'Student ELLNA Form':'ELLNA Forms'}</h2><p>${isStudent()?'Save a draft, submit it to the assigned class, and respond if a correction is requested.':'Review only submissions linked to your classes, request corrections when necessary, and record completion.'}</p><div class="ellna-tools"><button class="ghost" id="ellnaLoad">Load saved forms</button><select id="ellnaSaved" aria-label="Saved forms"><option value="">Choose a saved form…</option>${saved.map((r,i)=>`<option value="${i}">${e(r.payload.last_name)}, ${e(r.payload.first_name)} · ${e(r.school_year)} · ${e(statusOf(r).replaceAll('_',' '))}</option>`).join('')}</select><button class="ghost" id="ellnaNew">New form</button></div>${banner}<form id="ellnaForm">${contextFields(readOnly)}<fieldset ${readOnly?'disabled':''}><legend>Assessment</legend><div class="form-grid"><label>School year<select name="school_year">${years().map(y=>`<option ${y===(current.school_year||state.settings.schoolYear)?'selected':''}>${e(y)}</option>`).join('')}</select></label><label>Assessment date<input type="date" name="assessment_date" value="${e(current.assessment_date||'')}" required></label></div><p>Grade 3 completion refers to the school year immediately before the selected year.</p></fieldset>${fields.map(([title,items])=>`<fieldset ${readOnly?'disabled':''}><legend>${title}</legend><div class="form-grid">${items.map(input).join('')}</div></fieldset>`).join('')}<div class="ellna-tools">${readOnly?'':`<button class="ghost" type="submit" name="intent" value="draft">Save draft</button><button class="button" type="submit" name="intent" value="submit">Submit to school</button>`}${workflowButtons}${!isStudent()?'<button class="ghost" type="button" data-ellna-print="clean">Print clean form / PDF</button><button class="ghost" type="button" data-ellna-print="bubble">Print bubble sheet / PDF</button>':''}</div><p id="ellnaMessage" role="status"></p><p class="muted">Form version: photo-reconstruction-v1. This is not a BEA-certified optical form.${!isStudent()?' Print at 100% scale.':''}</p></form></section>`;
+    return `<section class="card ellna ${isStudent()?'student-ellna':''}"><h2>${isStudent()?'Student ELLNA Form':'ELLNA Forms'}</h2><p>${isStudent()?'Save a draft, submit it to the assigned class, and respond if a correction is requested.':'Review only submissions linked to your classes, request corrections when necessary, and record completion.'}</p><div class="ellna-tools"><button class="ghost" id="ellnaLoad">Load saved forms</button><select id="ellnaSaved" aria-label="Saved forms"><option value="">Choose a saved form…</option>${saved.map((r,i)=>`<option value="${i}">${e(r.payload.last_name||'Draft')}${r.payload.first_name?', '+e(r.payload.first_name):''} · ${e(r.school_year)} · ${e(statusOf(r).replaceAll('_',' '))}</option>`).join('')}</select><button class="ghost" id="ellnaNew">New form</button></div>${banner}<form id="ellnaForm">${contextFields(readOnly)}<fieldset ${readOnly?'disabled':''}><legend>Assessment</legend><div class="form-grid"><label>School year<select name="school_year">${years().map(y=>`<option ${y===(current.school_year||state.settings.schoolYear)?'selected':''}>${e(y)}</option>`).join('')}</select></label><label>Assessment date<input type="date" name="assessment_date" value="${e(current.assessment_date||'')}" required></label></div><p>Grade 3 completion refers to the school year immediately before the selected year.</p></fieldset>${fields.map(([title,items])=>`<fieldset ${readOnly?'disabled':''}><legend>${title}</legend><div class="form-grid">${items.map(input).join('')}</div></fieldset>`).join('')}<div class="ellna-tools">${readOnly?'':`<button class="ghost" type="submit" name="intent" value="draft">Save draft</button><button class="button" type="submit" name="intent" value="submit">Submit to school</button>`}${workflowButtons}${!isStudent()?'<button class="ghost" type="button" data-ellna-print="clean">Print clean form / PDF</button><button class="ghost" type="button" data-ellna-print="bubble">Print bubble sheet / PDF</button>':''}</div><p id="ellnaMessage" role="status"></p><p class="muted">Form version: photo-reconstruction-v1. This is not a BEA-certified optical form.${!isStudent()?' Print at 100% scale.':''}</p></form></section>`;
   };
   async function loadSaved() {
     if(cloudMode) {
@@ -113,11 +164,35 @@
     document.querySelector('#ellnaNew').onclick=()=>{current={};render();};
     document.querySelector('#ellnaLoad').onclick=async()=>{try{current=valueForm();await loadSaved();render();}catch(err){message('Unable to load: '+err.message);}};
     document.querySelector('#ellnaSaved').onchange=event=>{const r=saved[event.target.value];if(r){current=recordToCurrent(r);render();}};
-    document.querySelector('#ellnaClass')?.addEventListener('change',event=>{current={...valueForm(),class_id:event.target.value,student_id:''};render();});
+    document.querySelector('#ellnaClass')?.addEventListener('change',event=>{
+      current={...valueForm(),class_id:event.target.value,student_id:''};
+      render();
+    });
+    document.querySelector('#ellnaLearner')?.addEventListener('change',event=>{
+      const studentId=event.target.value;
+      const formValues=valueForm();
+      const learners=availableLearners(formValues.class_id||current.class_id);
+      const student=learners.find(item=>item.id===studentId);
+      current={...formValues,student_id:studentId};
+      if(student&&student.name&&!current.last_name&&!current.first_name){
+        const parts=student.name.trim().split(/\s+/);
+        if(parts.length===1){
+          current.first_name=parts[0];
+        }else if(parts.length>1){
+          current.last_name=parts[parts.length-1];
+          current.first_name=parts.slice(0,-1).join(' ');
+        }
+      }
+      render();
+    });
     document.querySelector('#ellnaForm').onsubmit=async event=>{
       event.preventDefault();const button=event.submitter;button.disabled=true;
       try {
-        const d=valueForm();if(age(d)<0) throw new Error('Birth date must be before the assessment date.');
+        const d=valueForm();
+        if(!isStudent()&&!d.student_id){
+          throw new Error('Please select an enrolled learner. If no learners are listed, enroll students in this class first.');
+        }
+        if(age(d)<0) throw new Error('Birth date must be before the assessment date.');
         const submitting=event.submitter?.value==='submit';
         const payloadKeys=['assessment_date',...all.map(item=>item[0])];
         const payload=Object.fromEntries(payloadKeys.map(key=>[key,d[key]??'']));
@@ -129,7 +204,8 @@
           if(error)throw error;id=data;await loadSaved();current=recordToCurrent(saved.find(row=>row.id===id));
         } else {
           id=id||crypto.randomUUID();const status=submitting?'submitted':statusOf(current);
-          const row={id,owner_id:owner,student_id:owner,class_id:d.class_id,school_year:d.school_year,payload,status,
+          const targetStudent=isStudent()?owner:(d.student_id||owner);
+          const row={id,owner_id:targetStudent,student_id:targetStudent,class_id:d.class_id,school_year:d.school_year,payload,status,
             submitted_at:submitting?(current.submitted_at||new Date().toISOString()):null,updated_at:new Date().toISOString()};
           await loadSaved();saved=saved.filter(r=>r.id!==id);saved.push(row);localStorage.setItem('ellna-demo-'+owner,JSON.stringify(saved));current=recordToCurrent(row);
         }

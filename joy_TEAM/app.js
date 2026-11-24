@@ -1029,7 +1029,9 @@ function usersTable() {
 }
 
 function adminUsersTable() {
-  const rows = state.users.map((u) => `
+  const rows = state.users.map((u) => {
+    const scope = u.role === "teacher" ? adminTeacherScope(u.id) : null;
+    return `
     <tr>
       <td>${esc(u.name)}</td>
       <td>${esc(u.email)}</td>
@@ -1045,16 +1047,27 @@ function adminUsersTable() {
         </select>
       </td>
       <td><span class="chip ${u.status === "active" ? "green" : "gold"}">${esc(u.status || "active")}</span></td>
+      <td>${scope ? `${scope.classes.length} class(es) · ${scope.students.length} student(s)` : "—"}</td>
       <td>
         <div class="row-actions">
           <button class="ghost" data-save-user="${u.id}">Save</button>
           ${u.status === "suspended" ? `<button class="ghost" data-status-user="${u.id}" data-status="active">Restore</button>` : `<button class="danger" data-status-user="${u.id}" data-status="suspended" ${u.id === user().id ? "disabled" : ""}>Suspend</button>`}
           <button class="danger" data-status-user="${u.id}" data-status="archived" ${u.id === user().id ? "disabled" : ""}>Archive</button>
+          ${scope ? `<button class="ghost" data-teacher-scope="${u.id}">View scope</button>` : ""}
         </div>
       </td>
     </tr>
-  `).join("");
-  return `<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
+  `;
+  }).join("");
+  return `<p class="muted">View scope shows the classes and enrolled students available to each Teacher.</p><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Visibility</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="7">${t("noItems")}</td></tr>`}</tbody></table>`;
+}
+
+function adminTeacherScope(teacherId) {
+  const classes = state.classes.filter((item) => !item.archivedAt && item.teacherId === teacherId);
+  const ids = new Set(classes.map((item) => item.id));
+  const studentIds = new Set(state.memberships.filter((item) => ids.has(item.classId)).map((item) => item.userId));
+  const students = state.users.filter((item) => studentIds.has(item.id) && item.role === "student" && item.status !== "archived");
+  return { classes, students };
 }
 
 function schoolsTable() {
@@ -1217,6 +1230,13 @@ function bind() {
   });
   document.querySelectorAll("[data-status-user]").forEach((button) => {
     button.addEventListener("click", () => saveAdminUser(button.dataset.statusUser, button.dataset.status));
+  });
+  document.querySelectorAll("[data-teacher-scope]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const teacher = state.users.find((item) => item.id === button.dataset.teacherScope);
+      const scope = teacher ? adminTeacherScope(teacher.id) : { classes: [], students: [] };
+      toast(`${teacher?.name || "Teacher"}: ${scope.classes.length} class(es), ${scope.students.length} visible student(s).`);
+    });
   });
   document.querySelector("#exportCsv")?.addEventListener("click", exportCsv);
   document.querySelector("#activitySelect")?.addEventListener("change", (event) => {

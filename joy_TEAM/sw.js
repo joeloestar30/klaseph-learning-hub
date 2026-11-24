@@ -1,5 +1,5 @@
 const CACHE = "klaseph-learning-hub-v8";
-const ASSETS = ["./", "./index.html", "./styles.css", "./config.js?v=8", "./app.js?v=8", "./manifest.json", "./assets/icon.svg"];
+const ASSETS = ["./", "./index.html", "./styles.css", "./config.js?v=9", "./app.js?v=9", "./manifest.json", "./assets/icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));

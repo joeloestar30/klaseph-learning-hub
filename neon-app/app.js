@@ -83,6 +83,15 @@ const seed = {
   schools: [
     { id: "school-local", name: "San Isidro National High School", code: "SINHS", region: "Region IV-A", division: "Laguna", district: "District 1" }
   ],
+  accessRoles: [
+    { id: "observer",               name: "Auditor / Observer" },
+    { id: "assessment_coordinator", name: "Assessment Coordinator" },
+    { id: "grade_coordinator",      name: "Grade / Subject Coordinator" },
+    { id: "teacher",                name: "Teacher" },
+    { id: "school_admin",           name: "School Administrator" },
+    { id: "division_admin",         name: "Division Administrator" },
+    { id: "super_admin",            name: "Super Administrator" }
+  ],
   adminInvites: [],
   auditLogs: [],
   settings: {
@@ -339,6 +348,8 @@ function hydrateAssessmentActivities(activityRows,rows) {
 }
 
 function applyCloudRows(rows,current=null) {
+  state.cloudLoadErrors={...(state.cloudLoadErrors||{}),...(rows.loadErrors||{})};
+  if(rows.schools&&!rows.loadErrors?.schools)delete state.cloudLoadErrors.schools;
   if(rows.student_exams)state.assessmentExams=rows.student_exams;
   if(rows.student_questions)state.assessmentQuestions=rows.student_questions;
   if(rows.student_question_choices)state.assessmentChoices=rows.student_question_choices;
@@ -1075,6 +1086,7 @@ function adminDirectoryTab() {
       </div>
       <div class="panel span-12">
         <div class="panel-title"><h3>User Directory</h3><span class="muted">Page ${(state.directoryPage||0)+1} · ${(state.directoryUsers||state.users).length} visible accounts</span></div>
+        ${state.cloudLoadErrors?.schools ? `<div class="standard-box"><b>Schools could not be loaded</b><span>${esc(state.cloudLoadErrors.schools)}</span></div>` : state.schools.length ? "" : `<div class="standard-box"><b>No schools were returned by Neon</b><span>The School dropdown cannot offer choices. If schools exist in Neon Tables, check the authenticated SELECT grant, the schools RLS policy, and the Neon Data API schema cache.</span></div>`}
         <div class="table-wrap">${adminUsersTable()}</div>
         <div class="row-actions"><button class="ghost" data-admin-page="directory" data-page-delta="-1" ${!state.directoryPage?'disabled':''}>Previous</button><button class="ghost" data-admin-page="directory" data-page-delta="1" ${(state.directoryUsers||state.users).length<(state.dataSaver?25:50)?'disabled':''}>Next</button></div>
       </div>
@@ -1109,15 +1121,19 @@ function adminClassesTab() {
 }
 
 function adminEnrollmentTab() {
+  const availableClasses = activeClasses();
+  const selectedClass = availableClasses.find((item) => item.id === document.querySelector('#enrollmentForm [name="classId"]')?.value) || availableClasses[0];
+  const classSummary = selectedClass ? enrollmentClassSummary(selectedClass) : "No active classes available. Create a class and add a subject first.";
   return `
     <section class="grid">
       <div class="composer span-4">
         <div class="panel-title"><h3>Add Student to Class</h3></div>
         <form id="enrollmentForm" class="form-grid">
-          <label class="full">Class<select name="classId" required>${classOptions()}</select></label>
+          <label class="full">Class · section<select name="classId" required ${availableClasses.length ? "" : "disabled"}>${classOptions(selectedClass?.id)}</select><small class="muted">Classes are grouped by school year and grade. Each option shows its section, subject, and class code.</small></label>
+          <div class="standard-box full" id="enrollmentClassSummary" aria-live="polite">${classSummary}</div>
           <label class="full">Student<select name="studentId" required>${studentOptions()}</select></label>
           <label>Status<select name="attendance"><option value="present">Present</option><option value="late">Late</option><option value="absent">Absent</option><option value="excused">Excused</option></select></label>
-          <button class="button full">Add or update enrollment</button>
+          <button class="button full" ${availableClasses.length ? "" : "disabled"}>Add or update enrollment</button>
         </form>
       </div>
       <div class="panel span-8">
@@ -1238,6 +1254,7 @@ function adminSchoolsTab() {
       </div>
       <div class="panel span-8">
         <div class="panel-title"><h3>Schools</h3><span class="muted">${state.schools.length} schools</span></div>
+        ${state.cloudLoadErrors?.schools ? `<div class="standard-box"><b>Schools could not be loaded</b><span>${esc(state.cloudLoadErrors.schools)}</span></div>` : state.schools.length ? "" : `<div class="standard-box"><b>No schools were returned by Neon</b><span>If school rows exist in the database, check the authenticated SELECT grant, the schools RLS policy, and the Neon Data API schema cache.</span></div>`}
         <div class="table-wrap">${schoolsTable()}</div>
       </div>
     </section>
@@ -1305,7 +1322,7 @@ function activityForm() {
   return `
     <form id="activityForm" class="form-grid">
       <label class="full">Title<input name="title" required placeholder="Quarter 1 performance task"></label>
-      <label>Class<select name="classId">${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label>
+      <label>Class<select name="classId">${teacherClasses().length ? `<option value="">Choose a class…</option>${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}` : `<option value="" disabled selected>No classes available</option>`}</select></label>
       <label>Type<select name="type"><option>Activity</option><option>Assignment</option><option>Quiz</option></select></label>
       <label>Due date<input type="date" name="due" required value="2026-08-22"></label>
       <label>Points<input type="number" name="points" min="1" value="10"></label>
@@ -1319,7 +1336,7 @@ function examGeneratorForm() {
   return `
     <form id="examForm" class="form-grid">
       <label class="full">Exam title<input name="title" required placeholder="Quarter 1 Science Check"></label>
-      <label>Class<select name="classId">${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label>
+      <label>Class<select name="classId">${teacherClasses().length ? `<option value="">Choose a class…</option>${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}` : `<option value="" disabled selected>No classes available</option>`}</select></label>
       <label>Grade level<select name="grade"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option><option selected>Grade 7</option><option>Grade 8</option><option>Grade 9</option><option>Grade 10</option><option>Grade 11</option><option>Grade 12</option></select></label>
       <label>Quarter<select name="quarter"><option>Quarter 1</option><option>Quarter 2</option><option>Quarter 3</option><option>Quarter 4</option></select></label>
       <label>Subject<select name="subject"><option>Science</option><option>Mathematics</option><option>Filipino</option><option>English</option><option>Araling Panlipunan</option></select></label>
@@ -1346,7 +1363,7 @@ function examUploadForm() {
   return `
     <form id="examUploadForm" class="form-grid">
       <label class="full">Exam title<input name="title" required placeholder="Quarter 1 Long Test"></label>
-      <label>Class<select name="classId" required>${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label>
+      <label>Class<select name="classId" required>${teacherClasses().length ? `<option value="">Choose a class…</option>${teacherClasses().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}` : `<option value="" disabled selected>No classes available</option>`}</select></label>
       <label>Due date<input type="date" name="due" required value="2026-08-22"></label>
       <label>Grade level<select name="grade"><option>Grade 1</option><option>Grade 2</option><option>Grade 3</option><option>Grade 4</option><option>Grade 5</option><option>Grade 6</option><option selected>Grade 7</option><option>Grade 8</option><option>Grade 9</option><option>Grade 10</option><option>Grade 11</option><option>Grade 12</option></select></label>
       <label>Quarter<select name="quarter"><option>Quarter 1</option><option>Quarter 2</option><option>Quarter 3</option><option>Quarter 4</option></select></label>
@@ -1550,7 +1567,7 @@ function interventionForm(selected) {
   if (!selected) return empty();
   return `
     <form id="interventionForm" class="form-grid">
-      <label class="full">Learner<select name="studentClass" required>${monitoredLearners().map((item) => `<option value="${item.learner?.id}:${item.classItem?.id}">${esc(item.learner?.name || "Learner")} - ${esc(item.classItem?.name || "Class")}</option>`).join("")}</select></label>
+      <label class="full">Learner<select name="studentClass" required>${monitoredLearners().length ? `<option value="">Choose a learner…</option>${monitoredLearners().map((item) => `<option value="${item.learner?.id}:${item.classItem?.id}">${esc(item.learner?.name || "Learner")} - ${esc(item.classItem?.name || "Class")}</option>`).join("")}` : `<option value="" disabled selected>No learners available</option>`}</select></label>
       <label class="full">Reason<select name="reason"><option>Low score</option><option>Missing task</option><option>Attendance concern</option><option>Literacy or numeracy support</option><option>Parent/guardian follow-up</option></select></label>
       <label class="full">Action taken<textarea name="action" required placeholder="Remediation, consultation, parent contact, or learning task"></textarea></label>
       <label>Follow-up date<input type="date" name="followUp" value="${new Date().toISOString().slice(0, 10)}"></label>
@@ -1713,25 +1730,55 @@ function auditLogsTable() {
 }
 
 function schoolOptions(selectedId = "") {
-  return state.schools.map((school) => `<option value="${school.id}" ${school.id === selectedId ? "selected" : ""}>${esc(school.name)}</option>`).join("");
+  if (!state.schools || !state.schools.length)
+    return `<option value="" disabled selected>No schools available</option>`;
+  return `<option value="">Choose a school…</option>` +
+    state.schools.map((school) => `<option value="${school.id}" ${school.id === selectedId ? "selected" : ""}>${esc(school.name)}</option>`).join("");
 }
 
 function teacherOptions(selectedId = "") {
-  return state.users
-    .filter((item) => item.role === "teacher" || item.role === "school_admin" || item.role === "super_admin")
-    .map((teacher) => `<option value="${teacher.id}" ${teacher.id === selectedId ? "selected" : ""}>${esc(teacher.name)}</option>`)
-    .join("");
+  const teachers = state.users
+    .filter((item) => item.role === "teacher" || item.role === "school_admin" || item.role === "super_admin");
+  if (!teachers.length)
+    return `<option value="" disabled selected>No teachers available</option>`;
+  return `<option value="">Choose a teacher…</option>` +
+    teachers.map((teacher) => `<option value="${teacher.id}" ${teacher.id === selectedId ? "selected" : ""}>${esc(teacher.name)}</option>`).join("");
 }
 
 function studentOptions(selectedId = "") {
-  return state.users
-    .filter((item) => item.role === "student")
-    .map((student) => `<option value="${student.id}" ${student.id === selectedId ? "selected" : ""}>${esc(student.name)}</option>`)
-    .join("");
+  const students = state.users.filter((item) => item.role === "student");
+  if (!students.length)
+    return `<option value="" disabled selected>No students enrolled</option>`;
+  return `<option value="">Choose a learner…</option>` +
+    students.map((student) => `<option value="${student.id}" ${student.id === selectedId ? "selected" : ""}>${esc(student.name)}</option>`).join("");
 }
 
 function classOptions(selectedId = "") {
-  return activeClasses().map((item) => `<option value="${item.id}" ${item.id === selectedId ? "selected" : ""}>${esc(item.name)}</option>`).join("");
+  const classes = activeClasses().slice().sort((a, b) => {
+    const schoolYearOrder = String(b.schoolYear || "").localeCompare(String(a.schoolYear || ""), undefined, { numeric: true });
+    if (schoolYearOrder) return schoolYearOrder;
+    const gradeOrder = String(a.gradeLevel || "").localeCompare(String(b.gradeLevel || ""), undefined, { numeric: true });
+    if (gradeOrder) return gradeOrder;
+    const sectionOrder = String(a.section || a.name || "").localeCompare(String(b.section || b.name || ""), undefined, { numeric: true });
+    if (sectionOrder) return sectionOrder;
+    return String(a.subject || "").localeCompare(String(b.subject || ""));
+  });
+  const groups = new Map();
+  classes.forEach((item) => {
+    const groupLabel = `${item.schoolYear || "School year not set"} · ${item.gradeLevel || "Grade not set"}`;
+    if (!groups.has(groupLabel)) groups.set(groupLabel, []);
+    const section = item.section || item.name || "Section not named";
+    const parts = [section, item.subject || "Subject not set", item.code ? `Code ${item.code}` : ""];
+    groups.get(groupLabel).push(`<option value="${item.id}" ${item.id === selectedId ? "selected" : ""}>${esc(parts.filter(Boolean).join(" · "))}</option>`);
+  });
+  return [...groups].map(([label, options]) => `<optgroup label="${esc(label)}">${options.join("")}</optgroup>`).join("");
+}
+
+function enrollmentClassSummary(classItem) {
+  const teacher = state.users.find((item) => item.id === classItem.teacherId)?.name || "Teacher not assigned";
+  const school = classItem.school || state.schools.find((item) => item.id === classItem.schoolId)?.name || "School not set";
+  const details = [classItem.name, classItem.subject || "Subject not set", classItem.gradeLevel || "Grade not set", classItem.section || "Section not set", classItem.schoolYear || "School year not set", classItem.code ? `Code ${classItem.code}` : "", school, teacher];
+  return `<b>Enrollment target</b><span>${details.map(esc).join(" · ")}</span>`;
 }
 
 function roleOptions(selectedRole = "student") {
@@ -1893,6 +1940,11 @@ function bind() {
   document.querySelector("#adminCreateUserForm")?.addEventListener("submit", saveUser);
   document.querySelector("#adminClassForm")?.addEventListener("submit", saveAdminClass);
   document.querySelector("#enrollmentForm")?.addEventListener("submit", saveEnrollment);
+  document.querySelector('#enrollmentForm [name="classId"]')?.addEventListener("change", (event) => {
+    const classItem = activeClasses().find((item) => item.id === event.target.value);
+    const summary = document.querySelector("#enrollmentClassSummary");
+    if (summary) summary.innerHTML = classItem ? enrollmentClassSummary(classItem) : "Select an active class.";
+  });
   document.querySelector("#announcementForm")?.addEventListener("submit", saveAnnouncement);
   document.querySelector("#settingsForm")?.addEventListener("submit", saveSettings);
   document.querySelector("#interventionForm")?.addEventListener("submit", saveIntervention);
@@ -2478,9 +2530,13 @@ async function saveIntervention(event) {
 
 async function refreshCloudData() {
   if (!cloudMode) return toast("Cloud mode is required.");
-  await loadCloudData(user().id);
-  render();
-  toast("Admin data refreshed.");
+  try {
+    await loadCloudData(user().id);
+    render();
+    toast("Admin data refreshed.");
+  } catch (error) {
+    reportCloudError(error,"refresh admin data");
+  }
 }
 
 async function saveSchool(event) {

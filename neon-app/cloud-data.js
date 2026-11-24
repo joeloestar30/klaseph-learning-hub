@@ -15,21 +15,44 @@
       // temporarily stale Neon/PostgREST schema cache must not prevent users
       // from signing in or administrators from reaching Access Management.
       const missingOptionalView=OPTIONAL_VIEWS.has(name)&&/could not find the table|schema cache/i.test(error.message||'');
-      if(error.code==='PGRST205'||error.code==='42P01'||missingOptionalView){
+      const optionalViewUnavailable=OPTIONAL_VIEWS.has(name)&&(error.code==='PGRST205'||error.code==='42P01'||missingOptionalView);
+      if(optionalViewUnavailable){
         window.KLASEPH_MONITOR?.capture('database_optional',error,{table:name,operation:'select'});
         return [];
       }
       window.KLASEPH_MONITOR?.capture('database',error,{table:name,operation:'select'});
-      throw error;
+      const guidance=name==='schools'
+        ?' Check the authenticated SELECT grant and schools RLS policy, then refresh the Neon Data API schema cache.'
+        :' Check the table, authenticated permissions, RLS policy, and Neon Data API schema cache.';
+      const loadError=new Error(`Could not load "${name}" from Neon: ${error.message||'unknown database error'}.${guidance}`);
+      loadError.name='CloudTableLoadError';
+      loadError.table=name;
+      loadError.code=error.code;
+      loadError.cause=error;
+      throw loadError;
     }
     return data||[];
   }
 
   async function fetchTables(client,names,options={}) {
-    const entries=await Promise.all(names.map(async name=>[name,await fetchTable(client,name,
-      name==='profiles'&&options.isAdmin?{page:options.directoryPage||0,pageSize:options.dataSaver?25:50}:
-      name==='audit_logs'?{page:options.auditPage||0,pageSize:options.dataSaver?15:25}:{} )]));
-    return Object.fromEntries(entries);
+    const loadErrors={};
+    const entries=await Promise.all(names.map(async name=>{
+      try {
+        return [name,await fetchTable(client,name,
+          name==='profiles'&&options.isAdmin?{page:options.directoryPage||0,pageSize:options.dataSaver?25:50}:
+          name==='audit_logs'?{page:options.auditPage||0,pageSize:options.dataSaver?15:25}:{} )];
+      } catch(error) {
+        // Keep the Admin workspace usable if its school selector data is
+        // unavailable, but retain a visible diagnostic instead of implying
+        // the database contains no school records.
+        if(name!=='schools')throw error;
+        loadErrors.schools=error.message||String(error);
+        return [name,[]];
+      }
+    }));
+    const rows=Object.fromEntries(entries);
+    rows.loadErrors=loadErrors;
+    return rows;
   }
 
   async function load(client,options={}) {

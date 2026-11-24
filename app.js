@@ -871,25 +871,30 @@ function monitoringView() {
 
 function usersView() {
   if (isAdmin()) return adminUsersView();
+  const students = teacherStudents();
   return `
     <section class="grid">
-      <div class="composer span-4">
-        <div class="panel-title"><h3>${t("createAccount")}</h3></div>
-        ${cloudMode ? `<div class="standard-box"><b>Cloud account creation</b><span>For security, each teacher or student creates their own account from the sign-up screen. This page shows visible class users after they join classes.</span></div>` : `<form id="userForm" class="form-grid">
-          <label class="full">Name<input name="name" required></label>
-          <label>Role<select name="role"><option value="student">Student</option><option value="teacher">Teacher</option></select></label>
-          <label>School<input name="school" value="${esc(user().school || "")}"></label>
-          <label class="full">Email<input name="email" type="email" required></label>
-          <label class="full">Password<input name="password" type="text" value="student123" required></label>
-          <button class="button full">${t("save")}</button>
-        </form>`}
-      </div>
-      <div class="panel span-8">
-        <div class="panel-title"><h3>Accounts</h3></div>
-        <div class="table-wrap">${usersTable()}</div>
+      <div class="panel span-12">
+        <div class="panel-title"><h3>My Students</h3><span class="muted">${students.length} enrolled accounts</span></div>
+        <p class="muted">Students are shown only when they are enrolled in one of your active classes. This list is read-only.</p>
+        <div class="table-wrap">${teacherStudentsTable(students)}</div>
       </div>
     </section>
   `;
+}
+
+function teacherStudents() {
+  const classIds = new Set(teacherClasses().map((item) => item.id));
+  const studentIds = new Set(state.memberships.filter((item) => classIds.has(item.classId)).map((item) => item.userId));
+  return state.users.filter((item) => studentIds.has(item.id) && item.role === "student" && item.status !== "archived");
+}
+
+function teacherStudentsTable(students) {
+  const rows = students.map((student) => {
+    const classes = teacherClasses().filter((classItem) => state.memberships.some((membership) => membership.classId === classItem.id && membership.userId === student.id));
+    return `<tr><td>${esc(student.name)}</td><td>${esc(student.school || "")}</td><td>${classes.map((item) => esc(item.name)).join(", ")}</td><td><span class="chip green">Enrolled</span></td></tr>`;
+  }).join("");
+  return `<table><thead><tr><th>Student</th><th>School</th><th>My class(es)</th><th>Status</th></tr></thead><tbody>${rows || `<tr><td colspan="4">No students are enrolled in your active classes.</td></tr>`}</tbody></table>`;
 }
 
 function adminUsersView() {
@@ -1518,7 +1523,9 @@ function analyticsTable() {
 }
 
 function adminUsersTable() {
-  const rows = state.users.map((u) => `
+  const rows = state.users.map((u) => {
+    const scope = u.role === "teacher" ? adminTeacherScope(u.id) : null;
+    return `
     <tr>
       <td>${esc(u.name)}</td>
       <td>${esc(u.email)}</td>
@@ -1534,16 +1541,27 @@ function adminUsersTable() {
         </select>
       </td>
       <td><span class="chip ${u.status === "active" ? "green" : "gold"}">${esc(u.status || "active")}</span></td>
+      <td>${scope ? `${scope.classes.length} class(es) · ${scope.students.length} student(s)` : "—"}</td>
       <td>
         <div class="row-actions">
           <button class="ghost" data-save-user="${u.id}">Save</button>
           ${u.status === "suspended" ? `<button class="ghost" data-status-user="${u.id}" data-status="active">Restore</button>` : `<button class="danger" data-status-user="${u.id}" data-status="suspended" ${u.id === user().id ? "disabled" : ""}>Suspend</button>`}
           <button class="danger" data-status-user="${u.id}" data-status="archived" ${u.id === user().id ? "disabled" : ""}>Archive</button>
+          ${scope ? `<button class="ghost" data-teacher-scope="${u.id}">${state.teacherScopePreviewUserId === u.id ? "Hide scope" : "View scope"}</button>` : ""}
         </div>
       </td>
     </tr>
-  `).join("");
-  return `<table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="6">${t("noItems")}</td></tr>`}</tbody></table>`;
+  `;
+  }).join("");
+  return `<p class="muted">Use <b>View scope</b> on a Teacher to verify their visible classes and students.</p><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>School</th><th>Status</th><th>Visibility</th><th>Actions</th></tr></thead><tbody>${rows || `<tr><td colspan="7">${t("noItems")}</td></tr>`}</tbody></table>`;
+}
+
+function adminTeacherScope(teacherId) {
+  const classes = activeClasses().filter((item) => item.teacherId === teacherId);
+  const classIds = new Set(classes.map((item) => item.id));
+  const studentIds = new Set(state.memberships.filter((item) => classIds.has(item.classId)).map((item) => item.userId));
+  const students = state.users.filter((item) => studentIds.has(item.id) && item.role === "student" && item.status !== "archived");
+  return { classes, students };
 }
 
 function schoolsTable() {
@@ -1745,6 +1763,13 @@ function bind() {
   });
   document.querySelectorAll("[data-status-user]").forEach((button) => {
     button.addEventListener("click", () => saveAdminUser(button.dataset.statusUser, button.dataset.status));
+  });
+  document.querySelectorAll("[data-teacher-scope]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const teacher = state.users.find((item) => item.id === button.dataset.teacherScope);
+      const scope = teacher ? adminTeacherScope(teacher.id) : { classes: [], students: [] };
+      toast(`${teacher?.name || "Teacher"}: ${scope.classes.length} class(es), ${scope.students.length} visible student(s).`);
+    });
   });
   document.querySelectorAll("[data-save-class]").forEach((button) => {
     button.addEventListener("click", () => saveAdminClassEdit(button.dataset.saveClass));
