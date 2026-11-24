@@ -1,6 +1,17 @@
 (() => {
   const ADMIN_ONLY = new Set(['schools','admin_invites','audit_logs']);
-  const OPTIONAL_VIEWS = new Set(['teacher_attempt_reviews','teacher_attempt_answers','teacher_item_analysis','teacher_competency_performance']);
+  const OPTIONAL_VIEWS = new Set([
+    'teacher_attempt_reviews',
+    'teacher_attempt_answers',
+    'teacher_item_analysis',
+    'teacher_competency_performance',
+    'student_exams',
+    'student_questions',
+    'student_question_choices',
+    'access_assignment_directory',
+    'access_request_queue',
+    'access_monitoring'
+  ]);
   const CORE = ['classes','class_members','activities','submissions','announcements','profiles','system_settings','interventions','attendance','teacher_attempt_reviews','teacher_attempt_answers','teacher_item_analysis','teacher_competency_performance','competencies','access_roles','access_assignment_directory','access_request_queue','access_monitoring'];
   const ASSESSMENTS = ['student_exams','student_questions','student_question_choices'];
   const orderBy = {activities:'created_at',submissions:'submitted_at',announcements:'created_at',audit_logs:'created_at',interventions:'created_at'};
